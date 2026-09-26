@@ -27,7 +27,7 @@ export interface AppState {
   apiKeyConfigured: boolean;
 }
 
-export type CaptureFailure = "empty" | "silent";
+export type CaptureFailure = "empty" | "silent" | "muted";
 
 export interface AudioPayload {
   data: string;

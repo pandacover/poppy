@@ -13,7 +13,7 @@ import { createHoldHotkey } from "./hotkey";
 import { disposeScraper, searchWeb } from "./search";
 import { transcribeAudio } from "./stt";
 import { formatHotkeyLabel } from "../shared/hotkey";
-import { messageForCapturePayload } from "../shared/capture-errors";
+import { CAPTURE_ERROR, messageForCapturePayload } from "../shared/capture-errors";
 import { parseSpokenIndex } from "../shared/parse-number";
 import type { AppState, AudioPayload } from "../shared/types";
 
@@ -26,6 +26,7 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
 let listenGeneration = 0;
+let awaitingCapture = false;
 let hold: ReturnType<typeof createHoldHotkey> | null = null;
 
 const accelerator = getHotkeyAccelerator();
@@ -51,7 +52,12 @@ function setState(patch: Partial<AppState>): void {
 }
 
 function busyPhase(): boolean {
-  return state.phase === "transcribing" || state.phase === "searching" || state.phase === "opening";
+  return (
+    awaitingCapture ||
+    state.phase === "transcribing" ||
+    state.phase === "searching" ||
+    state.phase === "opening"
+  );
 }
 
 function createWindow(): BrowserWindow {
@@ -109,17 +115,34 @@ function attachIpc(): void {
     await openResult(index);
   });
   ipcMain.handle("mic:error", (_event, message: string) => {
+    awaitingCapture = false;
     hold?.cancel();
     setState({
       phase: state.results.length > 0 ? "results" : "error",
-      error: message || "Microphone permission was denied.",
+      error: message || CAPTURE_ERROR.permissionDenied,
+    });
+  });
+  ipcMain.handle("mic:warn", (_event, message: string) => {
+    if (state.phase !== "listening") {
+      return;
+    }
+    setState({
+      error: message || CAPTURE_ERROR.silentMic,
     });
   });
 }
 
 function startListening(): void {
+  if (microphoneAccessDenied()) {
+    setState({
+      phase: state.results.length > 0 ? "results" : "error",
+      error: CAPTURE_ERROR.permissionDenied,
+    });
+    return;
+  }
   listenGeneration += 1;
   const generation = listenGeneration;
+  awaitingCapture = false;
   setState({
     phase: "listening",
     error: null,
@@ -131,12 +154,16 @@ function stopListening(): void {
   if (state.phase !== "listening") {
     return;
   }
-  setState({ phase: "transcribing", error: null });
+  // Stay on "listening" until the renderer submits audio or a capture error.
+  // That way mute/silence can be shown before STT, and a warning shown while
+  // holding is not wiped by a premature "Transcribing" state.
+  awaitingCapture = true;
   mainWindow?.webContents.send("hotkey:up", { generation: listenGeneration });
 }
 
 function cancelListening(): void {
   listenGeneration += 1;
+  awaitingCapture = false;
   hold?.cancel();
   mainWindow?.webContents.send("hotkey:cancel");
   setState({
@@ -149,11 +176,12 @@ async function handleAudio(payload: AudioPayload & { generation?: number }): Pro
   if (payload.generation != null && payload.generation !== listenGeneration) {
     return;
   }
+  awaitingCapture = false;
   const captureError = messageForCapturePayload(payload);
   if (captureError) {
     console.info("[poppy:capture]", payload.error ?? "missing-data", "generation", payload.generation);
     setState({
-      phase: state.results.length > 0 ? "results" : "idle",
+      phase: state.results.length > 0 ? "results" : "error",
       error: captureError,
     });
     return;
@@ -259,13 +287,28 @@ function allowMediaPermission(permission: string): boolean {
   return permission === "media" || permission === "audioCapture" || permission === "mediaKeySystem";
 }
 
+function microphoneAccessDenied(): boolean {
+  if (process.platform !== "darwin" && process.platform !== "win32") {
+    return false;
+  }
+  try {
+    return systemPreferences.getMediaAccessStatus("microphone") === "denied";
+  } catch {
+    return false;
+  }
+}
+
 async function requestMicrophoneAccess(): Promise<void> {
   if (process.platform !== "darwin") {
     return;
   }
-  const status = systemPreferences.getMediaAccessStatus("microphone");
-  if (status !== "granted") {
-    await systemPreferences.askForMediaAccess("microphone");
+  try {
+    const status = systemPreferences.getMediaAccessStatus("microphone");
+    if (status !== "granted") {
+      await systemPreferences.askForMediaAccess("microphone");
+    }
+  } catch {
+    /* unsupported */
   }
 }
 

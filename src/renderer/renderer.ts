@@ -15,6 +15,7 @@ let current: AppState | null = null;
 const capture = createVoiceCapture({
   submitAudio: (payload) => window.poppy.submitAudio(payload),
   reportMicError: (message) => window.poppy.reportMicError(message),
+  reportMicWarning: (message) => window.poppy.reportMicWarning(message),
 });
 
 const PHASE_LABEL: Record<AppState["phase"], string> = {

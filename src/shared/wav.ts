@@ -56,6 +56,18 @@ export function peakAmplitude(samples: ArrayLike<number>): number {
   return peak;
 }
 
+export function rmsAmplitude(samples: ArrayLike<number>): number {
+  if (samples.length === 0) {
+    return 0;
+  }
+  let sumSquares = 0;
+  for (let i = 0; i < samples.length; i += 1) {
+    const value = samples[i] ?? 0;
+    sumSquares += value * value;
+  }
+  return Math.sqrt(sumSquares / samples.length);
+}
+
 /** 16-bit mono PCM WAV. Whisper providers treat this as the safest container. */
 export function encodePcm16Wav(samples: ArrayLike<number>, sampleRate: number): ArrayBuffer {
   const rate = Math.max(1, Math.round(sampleRate));

@@ -1,20 +1,27 @@
 import {
+  audioInputSituation,
   audioTrackConstraints,
   isLikelyLoopbackLabel,
-  pickAudioInputId,
 } from "../shared/audio-devices";
 import { arrayBufferToBase64 } from "../shared/base64";
-import { evaluateCapture } from "../shared/evaluate-capture";
+import { CAPTURE_ERROR } from "../shared/capture-errors";
+import {
+  evaluateCapture,
+  isNearSilent,
+  MUTE_HINT_SECONDS,
+} from "../shared/evaluate-capture";
+import { classifyGetUserMediaError } from "../shared/media-errors";
 import type { AudioPayload } from "../shared/types";
-import { concatFloat32, encodePcm16Wav, mixDownToMono, peakAmplitude } from "../shared/wav";
+import { concatFloat32, encodePcm16Wav, mixDownToMono, peakAmplitude, rmsAmplitude } from "../shared/wav";
 
 interface VoiceCaptureCallbacks {
   submitAudio: (payload: AudioPayload & { generation: number }) => Promise<void>;
   reportMicError: (message: string) => Promise<void>;
+  reportMicWarning: (message: string) => Promise<void>;
 }
 
 interface PcmSession {
-  finish: () => Promise<{ samples: Float32Array; sampleRate: number }>;
+  finish: () => Promise<{ samples: Float32Array; sampleRate: number; muted: boolean }>;
 }
 
 /**
@@ -25,6 +32,10 @@ interface PcmSession {
  * `text`. We record PCM through AudioContext and encode 16-bit mono WAV
  * instead. MediaRecorder is only a fallback, and even then we decode back to
  * PCM before encoding WAV.
+ *
+ * Permission denial, missing hardware, OS mute, and digital silence are
+ * reported as distinct errors. A muted/silent warning can appear while the
+ * hotkey is still held; capture still stops on release without needing a click.
  */
 export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
   let activeGeneration: number | null = null;
@@ -37,13 +48,15 @@ export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
 
     let stream: MediaStream;
     try {
-      stream = await openMicrophone();
-    } catch {
+      stream = await openMicrophone((message) => {
+        if (activeGeneration === generation) {
+          void callbacks.reportMicWarning(message);
+        }
+      });
+    } catch (error) {
       if (activeGeneration === generation) {
         activeGeneration = null;
-        await callbacks.reportMicError(
-          "Microphone access was denied. Allow the mic for Poppy and try again.",
-        );
+        await callbacks.reportMicError(classifyGetUserMediaError(error).message);
       }
       return;
     }
@@ -53,21 +66,38 @@ export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
       return;
     }
 
+    const track = stream.getAudioTracks()[0];
+    const warnIfMuted = () => {
+      if (activeGeneration === generation) {
+        void callbacks.reportMicWarning(CAPTURE_ERROR.mutedMic);
+      }
+    };
+    if (track?.muted) {
+      warnIfMuted();
+    }
+    track?.addEventListener("mute", warnIfMuted);
+
     try {
-      session = await startPcmSession(stream);
+      session = await startPcmSession(stream, () => {
+        if (activeGeneration === generation) {
+          void callbacks.reportMicWarning(CAPTURE_ERROR.silentMic);
+        }
+      });
     } catch {
       if (activeGeneration !== generation) {
         stopTracks(stream);
         return;
       }
       try {
-        session = await startMediaRecorderSession(stream);
+        session = await startMediaRecorderSession(stream, () => {
+          if (activeGeneration === generation) {
+            void callbacks.reportMicWarning(CAPTURE_ERROR.silentMic);
+          }
+        });
       } catch {
         stopTracks(stream);
         activeGeneration = null;
-        await callbacks.reportMicError(
-          "Could not start audio capture. Check the microphone and try again.",
-        );
+        await callbacks.reportMicError(CAPTURE_ERROR.captureFailed);
         return;
       }
     }
@@ -90,12 +120,15 @@ export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
     pendingStopGeneration = null;
     activeGeneration = null;
 
-    const { samples, sampleRate } = await current.finish();
+    const { samples, sampleRate, muted } = await current.finish();
     const peak = peakAmplitude(samples);
+    const rms = rmsAmplitude(samples);
     const verdict = evaluateCapture({
       sampleCount: samples.length,
       peak,
+      rms,
       sampleRate,
+      muted,
     });
     if (!verdict.ok) {
       await callbacks.submitAudio({
@@ -136,14 +169,37 @@ export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
   return { start, stop, cancel };
 }
 
-async function openMicrophone(): Promise<MediaStream> {
+async function queryMicrophonePermission(): Promise<"granted" | "denied" | "prompt" | "unknown"> {
+  try {
+    const status = await navigator.permissions.query({ name: "microphone" as PermissionName });
+    if (status.state === "granted" || status.state === "denied" || status.state === "prompt") {
+      return status.state;
+    }
+    return "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+async function openMicrophone(onWarning: (message: string) => void): Promise<MediaStream> {
+  const permission = await queryMicrophonePermission();
+  if (permission === "denied") {
+    const error = new Error(CAPTURE_ERROR.permissionDenied);
+    error.name = "NotAllowedError";
+    throw error;
+  }
+
   let stream: MediaStream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
       audio: audioTrackConstraints(),
     });
-  } catch {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (first) {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    } catch (second) {
+      throw second ?? first;
+    }
   }
 
   let devices: MediaDeviceInfo[] = [];
@@ -158,13 +214,25 @@ async function openMicrophone(): Promise<MediaStream> {
     track.enabled = true;
   }
   const label = track?.label ?? "";
-  const picked = pickAudioInputId(
+  const situation = audioInputSituation(
     devices.map((device) => ({
       kind: device.kind,
       deviceId: device.deviceId,
       label: device.label,
     })),
   );
+
+  if (situation.noInputs) {
+    stopTracks(stream);
+    const error = new Error(CAPTURE_ERROR.noMicrophone);
+    error.name = "NotFoundError";
+    throw error;
+  }
+  if (situation.onlyLoopback || isLikelyLoopbackLabel(label)) {
+    onWarning(CAPTURE_ERROR.loopbackOnly);
+  }
+
+  const picked = situation.pickedId;
   const currentId = track?.getSettings().deviceId;
   if (!picked || !isLikelyLoopbackLabel(label) || picked === currentId) {
     return stream;
@@ -180,8 +248,12 @@ async function openMicrophone(): Promise<MediaStream> {
   }
 }
 
-async function startPcmSession(stream: MediaStream): Promise<PcmSession> {
-  const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+async function startPcmSession(
+  stream: MediaStream,
+  onLowLevel: () => void,
+): Promise<PcmSession> {
+  const AudioContextCtor =
+    window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
   if (!AudioContextCtor) {
     throw new Error("AudioContext is not available");
   }
@@ -197,12 +269,33 @@ async function startPcmSession(stream: MediaStream): Promise<PcmSession> {
     const source = ctx.createMediaStreamSource(stream);
     const chunks: Float32Array[] = [];
     let stopped = false;
+    let sumSquares = 0;
+    let sampleTotal = 0;
+    let hinted = false;
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     processor.onaudioprocess = (event) => {
       if (stopped) {
         return;
       }
-      chunks.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+      const data = event.inputBuffer.getChannelData(0);
+      chunks.push(new Float32Array(data));
+      for (let i = 0; i < data.length; i += 1) {
+        const sample = data[i] ?? 0;
+        sumSquares += sample * sample;
+      }
+      sampleTotal += data.length;
+      const elapsed = sampleTotal / (ctx.sampleRate || 16_000);
+      if (!hinted && elapsed >= MUTE_HINT_SECONDS) {
+        if (stream.getAudioTracks().some((track) => track.muted)) {
+          hinted = true;
+          return;
+        }
+        const rms = Math.sqrt(sumSquares / Math.max(1, sampleTotal));
+        if (isNearSilent(rms)) {
+          hinted = true;
+          onLowLevel();
+        }
+      }
     };
 
     // Pull the graph without playing to speakers (a playback stream can
@@ -217,13 +310,14 @@ async function startPcmSession(stream: MediaStream): Promise<PcmSession> {
         stopped = true;
         processor.onaudioprocess = null;
         disconnectQuietly(source, processor, sink);
+        const muted = stream.getAudioTracks().some((track) => track.muted);
         stopTracks(stream);
         try {
           await ctx.close();
         } catch {
           /* already closed */
         }
-        return { samples: concatFloat32(chunks), sampleRate: ctx.sampleRate || 16_000 };
+        return { samples: concatFloat32(chunks), sampleRate: ctx.sampleRate || 16_000, muted };
       },
     };
   } catch (error) {
@@ -236,7 +330,10 @@ async function startPcmSession(stream: MediaStream): Promise<PcmSession> {
   }
 }
 
-async function startMediaRecorderSession(stream: MediaStream): Promise<PcmSession> {
+async function startMediaRecorderSession(
+  stream: MediaStream,
+  onLowLevel: () => void,
+): Promise<PcmSession> {
   const chunks: Blob[] = [];
   const mimeType = pickMimeType();
   const recorder = mimeType
@@ -265,9 +362,10 @@ async function startMediaRecorderSession(stream: MediaStream): Promise<PcmSessio
         );
         recorder.stop();
       });
+      const muted = stream.getAudioTracks().some((track) => track.muted);
       stopTracks(stream);
       if (blob.size < 64) {
-        return { samples: new Float32Array(0), sampleRate: 16_000 };
+        return { samples: new Float32Array(0), sampleRate: 16_000, muted };
       }
       try {
         const ctx = new AudioContext();
@@ -277,12 +375,17 @@ async function startMediaRecorderSession(stream: MediaStream): Promise<PcmSessio
         for (let i = 0; i < decoded.numberOfChannels; i += 1) {
           channels.push(decoded.getChannelData(i));
         }
+        const samples = mixDownToMono(channels);
+        if (isNearSilent(rmsAmplitude(samples), peakAmplitude(samples))) {
+          onLowLevel();
+        }
         return {
-          samples: mixDownToMono(channels),
+          samples,
           sampleRate: decoded.sampleRate || 16_000,
+          muted,
         };
       } catch {
-        return { samples: new Float32Array(0), sampleRate: 16_000 };
+        return { samples: new Float32Array(0), sampleRate: 16_000, muted };
       }
     },
   };
