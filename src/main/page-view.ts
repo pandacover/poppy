@@ -6,13 +6,19 @@ import {
   LAUNCHER_MIN_HEIGHT,
   LAUNCHER_MIN_WIDTH,
   LAUNCHER_WIDTH,
-  PAGE_CHROME_BACKGROUND,
   PAGE_MIN_HEIGHT,
   PAGE_MIN_WIDTH,
+  PAGE_VIEW_BACKGROUND,
+  PAGE_VIEW_RADIUS,
+  PAGE_WINDOW_BACKGROUND,
   PAGE_WINDOW_HEIGHT,
   PAGE_WINDOW_WIDTH,
+  isFiniteViewBounds,
   pageViewBounds,
   pageViewIsLaidOut,
+  pointInViewBounds,
+  sanitizeViewBounds,
+  type ViewBounds,
 } from "../shared/page-layout";
 import { loadAllowingTransientAbort } from "../shared/page-navigate";
 import { isSafeHttpUrl } from "../shared/safe-url";
@@ -39,6 +45,8 @@ export function createPageView(
   let generation = 0;
   let resizeHandler: (() => void) | null = null;
   let needsInitialReady = false;
+  let slotBounds: ViewBounds | null = null;
+  let pointerForwardWin: BrowserWindow | null = null;
 
   function activeView(): WebContentsView | null {
     if (view && !view.webContents.isDestroyed()) {
@@ -47,14 +55,47 @@ export function createPageView(
     return null;
   }
 
+  function fallbackBounds(win: BrowserWindow): ViewBounds {
+    const [width, height] = win.getContentSize();
+    return pageViewBounds(width, height);
+  }
+
+  /**
+   * Keep the guest view above the launcher webContents and sized to the glass
+   * hole. The launcher page still paints the frosted frame; `-webkit-app-region:
+   * drag` on that full-window overlay is what previously ate wheel / click
+   * events (there is no View.setIgnoreMouseEvents).
+   */
   function layout(): void {
     const win = getWindow();
     const current = activeView();
     if (!win || win.isDestroyed() || !current) {
       return;
     }
-    const [width, height] = win.getContentSize();
-    current.setBounds(pageViewBounds(width, height));
+    const bounds = slotBounds ?? fallbackBounds(win);
+    current.setBounds(bounds);
+    current.setBorderRadius(PAGE_VIEW_RADIUS);
+    current.setBackgroundColor(PAGE_VIEW_BACKGROUND);
+    win.contentView.addChildView(current);
+  }
+
+  function focusPage(): void {
+    const current = activeView();
+    if (current && !current.webContents.isDestroyed()) {
+      current.webContents.focus();
+    }
+  }
+
+  function setSlot(next: unknown): void {
+    if (!isFiniteViewBounds(next)) {
+      return;
+    }
+    const sanitized = sanitizeViewBounds(next);
+    if (!pageViewIsLaidOut(sanitized)) {
+      return;
+    }
+    slotBounds = sanitized;
+    layout();
   }
 
   function detachResize(win: BrowserWindow | null): void {
@@ -68,6 +109,48 @@ export function createPageView(
     detachResize(win);
     resizeHandler = () => layout();
     win.on("resize", resizeHandler);
+  }
+
+  function onBeforeMouse(event: Electron.Event, mouse: Electron.MouseInputEvent): void {
+    const current = activeView();
+    if (!current || current.webContents.isDestroyed()) {
+      return;
+    }
+    const bounds = current.getBounds();
+    if (!pointInViewBounds(mouse.x, mouse.y, bounds)) {
+      return;
+    }
+    // If the launcher webContents still receives this event, the native view
+    // missed the hit test. Swallow it so overflow:hidden chrome cannot eat
+    // the wheel, then deliver it to the guest page.
+    event.preventDefault();
+    const forwarded: Electron.MouseInputEvent = {
+      ...mouse,
+      x: Math.round(mouse.x - bounds.x),
+      y: Math.round(mouse.y - bounds.y),
+    };
+    current.webContents.sendInputEvent(forwarded);
+    if (mouse.type === "mouseDown" || mouse.type === "mouseWheel") {
+      current.webContents.focus();
+    }
+  }
+
+  function attachPointerForward(win: BrowserWindow): void {
+    if (pointerForwardWin === win) {
+      return;
+    }
+    if (pointerForwardWin && !pointerForwardWin.isDestroyed()) {
+      pointerForwardWin.webContents.removeListener("before-mouse-event", onBeforeMouse);
+    }
+    pointerForwardWin = win;
+    win.webContents.on("before-mouse-event", onBeforeMouse);
+  }
+
+  function detachPointerForward(): void {
+    if (pointerForwardWin && !pointerForwardWin.isDestroyed()) {
+      pointerForwardWin.webContents.removeListener("before-mouse-event", onBeforeMouse);
+    }
+    pointerForwardWin = null;
   }
 
   function pageSession() {
@@ -251,7 +334,7 @@ export function createPageView(
     launcherSize = { width: bounds.width, height: bounds.height };
 
     win.setAlwaysOnTop(false);
-    win.setBackgroundColor(PAGE_CHROME_BACKGROUND);
+    win.setBackgroundColor(PAGE_WINDOW_BACKGROUND);
     win.setMinimumSize(PAGE_MIN_WIDTH, PAGE_MIN_HEIGHT);
     win.setBounds({
       x: bounds.x,
@@ -272,10 +355,12 @@ export function createPageView(
         session: pageSession(),
       },
     });
-    next.setBackgroundColor(PAGE_CHROME_BACKGROUND);
+    next.setBackgroundColor(PAGE_VIEW_BACKGROUND);
+    next.setBorderRadius(PAGE_VIEW_RADIUS);
     attachGuards(next.webContents);
     win.contentView.addChildView(next);
     attachResize(win);
+    attachPointerForward(win);
     view = next;
     needsInitialReady = true;
     layout();
@@ -288,7 +373,9 @@ export function createPageView(
     const current = view;
     view = null;
     needsInitialReady = false;
+    slotBounds = null;
     detachResize(win);
+    detachPointerForward();
 
     if (current && !current.webContents.isDestroyed()) {
       if (win && !win.isDestroyed()) {
@@ -357,6 +444,8 @@ export function createPageView(
     show,
     close,
     layout,
+    setSlot,
+    focus: focusPage,
     isOpen: () => activeView() != null,
   };
 }

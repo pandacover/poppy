@@ -195,6 +195,12 @@ function attachIpc(): void {
   ipcMain.handle("page:close", () => {
     closePage();
   });
+  ipcMain.handle("page:slot", (_event, bounds: { x?: number; y?: number; width?: number; height?: number }) => {
+    if (!pageView.isOpen()) {
+      return;
+    }
+    pageView.setSlot(bounds);
+  });
   ipcMain.handle("mic:error", (_event, message: string) => {
     awaitingCapture = false;
     hold?.cancel();
@@ -375,6 +381,7 @@ async function openResult(index: number): Promise<void> {
       return;
     }
     setState({ phase: "page", mode: "pick", error: null });
+    pageView.focus();
   } catch (error) {
     if (state.phase !== "opening") {
       return;
