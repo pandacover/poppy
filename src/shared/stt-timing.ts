@@ -4,6 +4,12 @@ import { arrayBufferToBase64 } from "./base64";
 export const STT_MODEL = "scribe_v2_realtime";
 
 /**
+ * ISO 639-1 English. Passed as `language_code` so Scribe skips auto-detect.
+ * The realtime API also accepts ISO 639-3 (`eng`); ElevenLabs examples use `en`.
+ */
+export const STT_LANGUAGE_CODE = "en";
+
+/**
  * ElevenLabs VAD `vad_silence_threshold_secs` minimum is 0.3s (SDK validates
  * 0.3–3.0). 250ms is below that floor, so we use 0.3s on the wire and a local
  * 250ms post-release wait for leftover audio.
