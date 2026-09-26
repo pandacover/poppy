@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self'; script-src 'self'; media-src 'self' blob: mediastream:; connect-src 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Poppy</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <header class="titlebar">
+        <div class="brand">
+          <span class="mark" aria-hidden="true"></span>
+          <span class="name">poppy</span>
+        </div>
+        <div class="window-controls">
+          <button type="button" id="btn-min" title="Minimize" aria-label="Minimize">
+            <span></span>
+          </button>
+          <button type="button" id="btn-hide" title="Hide" aria-label="Hide">
+            <span></span>
+          </button>
+        </div>
+      </header>
+
+      <main>
+        <div id="pill" class="pill" data-phase="idle">
+          <span id="wave" class="wave" aria-hidden="true">
+            <i></i><i></i><i></i><i></i><i></i>
+          </span>
+          <span id="pill-text">Ready</span>
+        </div>
+        <p id="hint" class="hint"></p>
+        <p id="query" class="query" hidden></p>
+        <p id="error" class="error" hidden></p>
+        <ol id="results" class="results"></ol>
+      </main>
+    </div>
+    <script src="./renderer.js"></script>
+  </body>
+</html>
