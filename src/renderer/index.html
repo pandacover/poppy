@@ -13,28 +13,6 @@
   <body data-phase="idle">
     <div class="stage" id="stage">
       <div id="app">
-        <header class="titlebar" id="titlebar" hidden>
-          <div class="brand">
-            <span class="mark" aria-hidden="true"></span>
-            <span class="name">poppy</span>
-          </div>
-          <div class="window-controls">
-            <button type="button" id="btn-min" title="Minimize" aria-label="Minimize">
-              <span></span>
-            </button>
-            <button type="button" id="btn-hide" title="Hide" aria-label="Hide">
-              <span></span>
-            </button>
-          </div>
-        </header>
-
-        <div id="pagebar" class="pagebar" hidden>
-          <button type="button" id="btn-back" title="Back to results" aria-label="Back to results">
-            Results
-          </button>
-          <span id="page-title" class="page-title"></span>
-        </div>
-
         <main>
           <div class="launcher" id="launcher">
             <div class="glass" id="glass">
@@ -75,6 +53,24 @@
               <ol id="results" class="results"></ol>
             </div>
           </div>
+
+          <section class="page-frame glass" id="page-frame" hidden>
+            <header class="pagebar" id="pagebar">
+              <button type="button" id="btn-back" title="Back to results" aria-label="Back to results">
+                Results
+              </button>
+              <span id="page-title" class="page-title"></span>
+              <div class="window-controls">
+                <button type="button" id="btn-min" title="Minimize" aria-label="Minimize">
+                  <span></span>
+                </button>
+                <button type="button" id="btn-hide" title="Hide" aria-label="Hide">
+                  <span></span>
+                </button>
+              </div>
+            </header>
+            <div class="page-slot" id="page-slot" aria-hidden="true"></div>
+          </section>
         </main>
       </div>
     </div>

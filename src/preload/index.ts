@@ -35,6 +35,8 @@ contextBridge.exposeInMainWorld("poppy", {
     ipcRenderer.invoke("audio:submit", payload),
   openResult: (index: number) => ipcRenderer.invoke("results:open", index),
   closePage: () => ipcRenderer.invoke("page:close"),
+  layoutPageView: (bounds: { x: number; y: number; width: number; height: number }) =>
+    ipcRenderer.invoke("page:slot", bounds),
   notifyKeyUp: (input: { key?: string; code?: string }) =>
     ipcRenderer.invoke("hotkey:keyup", input),
   cancelListen: () => ipcRenderer.invoke("listen:cancel"),

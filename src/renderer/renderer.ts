@@ -7,8 +7,8 @@ const shortcut = document.querySelector("#shortcut") as HTMLElement;
 const hint = document.querySelector("#hint") as HTMLElement;
 const errorEl = document.querySelector("#error") as HTMLElement;
 const resultsEl = document.querySelector("#results") as HTMLOListElement;
-const pagebar = document.querySelector("#pagebar") as HTMLElement;
-const titlebar = document.querySelector("#titlebar") as HTMLElement;
+const pageFrame = document.querySelector("#page-frame") as HTMLElement;
+const pageSlot = document.querySelector("#page-slot") as HTMLElement;
 const pageTitleEl = document.querySelector("#page-title") as HTMLElement;
 const backBtn = document.querySelector("#btn-back") as HTMLButtonElement;
 const minBtn = document.querySelector("#btn-min") as HTMLButtonElement;
@@ -21,6 +21,7 @@ const SEARCH_PLACEHOLDER = "What are you looking for?";
 
 let current: AppState | null = null;
 let fitRaf = 0;
+let slotRaf = 0;
 
 const capture = createVoiceCapture({
   submitAudio: (payload) => window.poppy.submitAudio(payload),
@@ -102,6 +103,25 @@ function scheduleFit(): void {
   });
 }
 
+function reportPageSlot(): void {
+  if (slotRaf) {
+    return;
+  }
+  slotRaf = requestAnimationFrame(() => {
+    slotRaf = 0;
+    if (!current || !pageOpen(current) || typeof window.poppy?.layoutPageView !== "function") {
+      return;
+    }
+    const rect = pageSlot.getBoundingClientRect();
+    void window.poppy.layoutPageView({
+      x: Math.round(rect.x),
+      y: Math.round(rect.y),
+      width: Math.max(0, Math.round(rect.width)),
+      height: Math.max(0, Math.round(rect.height)),
+    });
+  });
+}
+
 function render(state: AppState): void {
   current = state;
   const viewing = pageOpen(state);
@@ -122,8 +142,7 @@ function render(state: AppState): void {
   errorEl.hidden = !state.error;
   errorEl.textContent = state.error ?? "";
 
-  titlebar.hidden = !viewing;
-  pagebar.hidden = !viewing;
+  pageFrame.hidden = !viewing;
   pageTitleEl.textContent = viewing
     ? state.error || state.pageTitle || state.pageUrl || "Loading…"
     : "";
@@ -156,6 +175,9 @@ function render(state: AppState): void {
   }
 
   scheduleFit();
+  if (viewing) {
+    reportPageSlot();
+  }
 }
 
 function idlePreview(): AppState {
@@ -203,13 +225,44 @@ function resultsPreview(): AppState {
   };
 }
 
+function pagePreview(): AppState {
+  return {
+    ...resultsPreview(),
+    phase: "page",
+    pageUrl: "https://example.com/",
+    pageTitle: "Example Domain",
+  };
+}
+
+function fillPagePreview(slot: HTMLElement): void {
+  slot.classList.add("is-preview");
+  slot.replaceChildren();
+  const title = document.createElement("h1");
+  title.textContent = "Example Domain";
+  slot.append(title);
+  for (let i = 0; i < 18; i += 1) {
+    const p = document.createElement("p");
+    p.textContent =
+      "This is long example copy so the in-app page slot can scroll. Poppy keeps the guest page inside the glass frame, with a Results pill up top and the desktop visible outside the rounded border.";
+    slot.append(p);
+  }
+}
+
 function previewFromQuery(): AppState | null {
   const mode = new URLSearchParams(location.search).get("preview");
+  if (!mode) {
+    return null;
+  }
+  document.documentElement.dataset.preview = mode;
   if (mode === "idle") {
     return idlePreview();
   }
   if (mode === "results") {
     return resultsPreview();
+  }
+  if (mode === "page") {
+    fillPagePreview(pageSlot);
+    return pagePreview();
   }
   return null;
 }
@@ -262,8 +315,13 @@ if (hasPoppy) {
 
   void window.poppy.getState().then(render);
 
-  const resizeObserver = new ResizeObserver(() => scheduleFit());
+  const resizeObserver = new ResizeObserver(() => {
+    scheduleFit();
+    reportPageSlot();
+  });
   resizeObserver.observe(glass);
+  resizeObserver.observe(pageSlot);
+  window.addEventListener("resize", () => reportPageSlot());
 } else {
   const preview = previewFromQuery();
   if (preview) {

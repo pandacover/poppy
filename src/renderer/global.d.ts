@@ -9,6 +9,7 @@ export interface PoppyApi {
   submitAudio: (payload: AudioPayload & { generation: number }) => Promise<void>;
   openResult: (index: number) => Promise<void>;
   closePage: () => Promise<void>;
+  layoutPageView: (bounds: { x: number; y: number; width: number; height: number }) => Promise<void>;
   notifyKeyUp: (input: { key?: string; code?: string }) => Promise<void>;
   cancelListen: () => Promise<void>;
   reportMicError: (message: string) => Promise<void>;

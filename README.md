@@ -85,7 +85,7 @@ Google’s public SERP is **not** the current backend. Google was hitting CAPTCH
 
 ## Layout
 
-The idle launcher is a frameless, transparent window: desktop shows through outside a frosted glass frame, with a solid white search pill inside. After a search, that same glass panel grows downward and lists numbered results as white rounded cards. Opening a result still expands into the in-app page view.
+The idle launcher is a frameless, transparent window: desktop shows through outside a frosted glass frame, with a solid white search pill inside. After a search, that same glass panel grows downward and lists numbered results as white rounded cards. Opening a result expands into the same glass family — a frosted frame with a Results pill and the page rendered in the inner slot. Wheel, trackpad, and keyboard scrolling work inside that page.
 
 ```
 src/main       main process: hotkey, STT, search, in-app page view
