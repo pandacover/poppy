@@ -42,4 +42,6 @@ contextBridge.exposeInMainWorld("poppy", {
   reportMicWarning: (message: string) => ipcRenderer.invoke("mic:warn", message),
   minimize: () => ipcRenderer.invoke("window:minimize"),
   hide: () => ipcRenderer.invoke("window:hide"),
+  fitWindow: (size: { width: number; height: number }) =>
+    ipcRenderer.invoke("window:fit", size),
 });

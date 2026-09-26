@@ -85,10 +85,12 @@ Google’s public SERP is **not** the current backend. Google was hitting CAPTCH
 
 ## Layout
 
+The idle launcher is a frameless, transparent glass pill (macOS vibrancy / Windows acrylic when available; CSS frost over a lavender-blue wash on Linux). After a search, that same glass panel grows downward and lists numbered results as white rounded cards. Opening a result still expands into the in-app page view.
+
 ```
 src/main       main process: hotkey, STT, search, in-app page view
 src/preload    contextBridge API
-src/renderer   UI (listening pill, numbered results, page toolbar)
+src/renderer   UI (glass search launcher, numbered results, page toolbar)
 src/shared     parsers, audio helpers, and types (unit-tested)
 ```
 
