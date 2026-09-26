@@ -62,7 +62,7 @@ function hintCopy(state: AppState): string {
       : `Release ${hotkey} when you’re done speaking`;
   }
   if (state.phase === "results") {
-    return `Hold ${hotkey} and say 1–${state.results.length} to open. Click a row if you prefer.`;
+    return "";
   }
   if (state.phase === "idle") {
     return "";
