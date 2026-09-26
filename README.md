@@ -2,7 +2,7 @@
 
 Hold a hotkey, speak a search, pick a result by saying its number.
 
-Poppy is a small Electron launcher: it listens while you hold a global shortcut, transcribes with OpenRouter Whisper, shows the top 5 organic DuckDuckGo results, then opens the one you speak.
+Poppy is a small Electron launcher: it listens while you hold a global shortcut, transcribes with OpenRouter Whisper, shows the top 5 organic Google results, then opens the one you speak.
 
 ## Requirements
 
@@ -61,9 +61,22 @@ with model `openai/whisper-large-v3-turbo` and `input_audio: { data, format }`.
 
 ## Search
 
-This first slice scrapes DuckDuckGo HTML (`https://html.duckduckgo.com/html/?q=...`) in a hidden `BrowserWindow`, then keeps the top 5 organic title / URL / snippet rows (ads and sponsored blocks are dropped).
+Poppy does **not** call the Google Search API. It loads Google's public results page in a hidden Chromium `BrowserWindow`:
 
-That scrape is a stand-in. The search module is isolated so it can later swap to Brave Search, Bing Web Search API, or a self-hosted SearXNG instance. Google scrape is out of scope.
+`https://www.google.com/search?q=...&hl=en&pws=0&gbv=1`
+
+(`gbv=1` asks for the HTML-oriented results view. Google may still serve the full JavaScript SERP; extraction runs against the rendered DOM either way.)
+
+After load, Poppy reads organic title / URL / snippet rows from the DOM, drops ads/sponsored blocks as best it can from the markup, and keeps the top 5. Saying a number still opens that URL with `shell.openExternal`.
+
+This scrape can break when:
+
+- Google shows a **CAPTCHA** / “unusual traffic” page
+- Google shows a **cookie consent** or other interstitial
+- Google changes SERP HTML
+- The network looks automated (datacenter IPs are often blocked)
+
+Poppy detects captcha and consent pages and shows a clear error instead of hanging. There is no automatic “Accept all” click-through.
 
 ## Layout
 
@@ -79,5 +92,5 @@ src/shared     parsers and types (unit-tested)
 - **Missing key** — copy `.env.example` to `.env` in the project root (the directory you run `npm run dev` from).
 - **Mic denied** — grant microphone access to Poppy / Electron in OS settings and try again.
 - **STT failure** — check the key, OpenRouter credits, and network; very short holds may not capture enough audio.
-- **Empty search** — try a more specific query; DDG HTML can also change or rate-limit.
+- **Google CAPTCHA / consent / empty results** — this is a page scrape, not an API. Try later, from a normal residential network, or after Google stops showing an interstitial.
 - **Hotkey does nothing** — another app owns that combo, or the window manager ate it. Set `POPPY_HOTKEY`.
