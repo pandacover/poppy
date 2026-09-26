@@ -68,14 +68,15 @@ describe("launcherWindowChrome", () => {
     }
   });
 
-  it("enables vibrancy on macOS and acrylic on Windows", () => {
+  it("does not frost the whole window with vibrancy or acrylic", () => {
     const mac = launcherWindowChrome("darwin");
-    assert.equal(mac.vibrancy, "under-window");
-    assert.equal(mac.visualEffectState, "active");
     assert.equal(mac.roundedCorners, true);
+    assert.equal(mac.vibrancy, undefined);
+    assert.equal(mac.visualEffectState, undefined);
+    assert.equal(mac.backgroundMaterial, undefined);
 
     const win = launcherWindowChrome("win32");
-    assert.equal(win.backgroundMaterial, "acrylic");
+    assert.equal(win.backgroundMaterial, undefined);
     assert.equal(win.vibrancy, undefined);
 
     const linux = launcherWindowChrome("linux");
