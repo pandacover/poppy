@@ -1,9 +1,12 @@
 import { STT_MODEL } from "../shared/types";
-
-interface TranscriptionResponse {
-  text?: string;
-  error?: { message?: string; code?: number | string };
-}
+import { normalizeAudioFormat } from "../shared/audio-format";
+import { base64ByteLength } from "../shared/base64";
+import { CAPTURE_ERROR } from "../shared/capture-errors";
+import {
+  extractSttErrorMessage,
+  extractTranscriptText,
+  responseKeys,
+} from "../shared/stt-response";
 
 export async function transcribeAudio(
   apiKey: string,
@@ -11,6 +14,8 @@ export async function transcribeAudio(
 ): Promise<string> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30_000);
+  const format = normalizeAudioFormat(audio.format);
+  const bytes = base64ByteLength(audio.data);
 
   let response: Response;
   try {
@@ -26,47 +31,46 @@ export async function transcribeAudio(
         model: STT_MODEL,
         input_audio: {
           data: audio.data,
-          format: normalizeFormat(audio.format),
+          format,
         },
       }),
       signal: controller.signal,
     });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      throw new Error("Speech-to-text timed out. Try a shorter query.");
+      throw new Error(CAPTURE_ERROR.timeout);
     }
-    throw new Error("Could not reach OpenRouter. Check your network connection.");
+    throw new Error(CAPTURE_ERROR.network);
   } finally {
     clearTimeout(timeout);
   }
 
-  const payload = (await response.json().catch(() => null)) as
-    | TranscriptionResponse
-    | null;
+  const payload = (await response.json().catch(() => null)) as unknown;
+  console.info(
+    "[poppy:stt]",
+    JSON.stringify({
+      format,
+      bytes,
+      status: response.status,
+      keys: responseKeys(payload),
+    }),
+  );
 
   if (!response.ok) {
-    const message = payload?.error?.message || `Speech-to-text failed (${response.status}).`;
+    const message = extractSttErrorMessage(payload) || `Speech-to-text failed (${response.status}).`;
     if (response.status === 401 || response.status === 403) {
       throw new Error("OpenRouter rejected the API key. Check OPENROUTER_API_KEY.");
     }
     throw new Error(message);
   }
 
-  const text = payload?.text?.trim() ?? "";
+  const text = extractTranscriptText(payload);
   if (!text) {
-    throw new Error("Didn't catch that. Hold the hotkey and try again.");
+    const nested = extractSttErrorMessage(payload);
+    if (nested) {
+      throw new Error(nested);
+    }
+    throw new Error(CAPTURE_ERROR.emptyTranscript);
   }
   return text;
-}
-
-function normalizeFormat(format: string): string {
-  const value = format.toLowerCase().replace(/^audio\//, "").split(";")[0];
-  if (value.includes("webm")) return "webm";
-  if (value.includes("wav")) return "wav";
-  if (value.includes("mpeg") || value === "mp3") return "mp3";
-  if (value.includes("mp4") || value === "m4a") return "m4a";
-  if (value.includes("ogg")) return "ogg";
-  if (value.includes("flac")) return "flac";
-  if (value.includes("aac")) return "aac";
-  return value || "webm";
 }

@@ -27,9 +27,13 @@ export interface AppState {
   apiKeyConfigured: boolean;
 }
 
+export type CaptureFailure = "empty" | "silent";
+
 export interface AudioPayload {
   data: string;
   format: string;
+  /** Set when the renderer captured nothing usable and `data` is empty. */
+  error?: CaptureFailure;
 }
 
 export const DEFAULT_HOTKEY = "CommandOrControl+Shift+Space";

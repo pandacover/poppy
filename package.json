@@ -13,7 +13,7 @@
     "build": "node scripts/build.mjs",
     "dev": "node scripts/build.mjs && electron .",
     "start": "node scripts/build.mjs && electron .",
-    "test": "tsx --test src/shared/*.test.ts"
+    "test": "tsx --test src/shared/*.test.ts src/main/*.test.ts"
   },
   "dependencies": {
     "cheerio": "^1.1.2",

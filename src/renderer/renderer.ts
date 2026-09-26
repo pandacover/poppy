@@ -1,3 +1,4 @@
+import { createVoiceCapture } from "./capture";
 import type { AppState } from "../shared/types";
 
 const pill = document.querySelector("#pill") as HTMLElement;
@@ -10,11 +11,11 @@ const minBtn = document.querySelector("#btn-min") as HTMLButtonElement;
 const hideBtn = document.querySelector("#btn-hide") as HTMLButtonElement;
 
 let current: AppState | null = null;
-let mediaRecorder: MediaRecorder | null = null;
-let mediaStream: MediaStream | null = null;
-let chunks: Blob[] = [];
-let activeGeneration: number | null = null;
-let pendingStopGeneration: number | null = null;
+
+const capture = createVoiceCapture({
+  submitAudio: (payload) => window.poppy.submitAudio(payload),
+  reportMicError: (message) => window.poppy.reportMicError(message),
+});
 
 const PHASE_LABEL: Record<AppState["phase"], string> = {
   idle: "Ready",
@@ -89,107 +90,6 @@ function render(state: AppState): void {
   }
 }
 
-async function startRecording(generation: number): Promise<void> {
-  await stopTracks(false);
-  activeGeneration = generation;
-  chunks = [];
-  try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
-    });
-  } catch {
-    if (activeGeneration === generation) {
-      activeGeneration = null;
-      await window.poppy.reportMicError(
-        "Microphone access was denied. Allow the mic for Poppy and try again.",
-      );
-    }
-    return;
-  }
-
-  if (activeGeneration !== generation) {
-    mediaStream.getTracks().forEach((track) => track.stop());
-    mediaStream = null;
-    return;
-  }
-
-  const mimeType = pickMimeType();
-  mediaRecorder = mimeType
-    ? new MediaRecorder(mediaStream, { mimeType })
-    : new MediaRecorder(mediaStream);
-  mediaRecorder.addEventListener("dataavailable", (event) => {
-    if (event.data.size > 0) {
-      chunks.push(event.data);
-    }
-  });
-  mediaRecorder.start(100);
-  if (pendingStopGeneration === generation) {
-    await stopAndSubmit(generation);
-  }
-}
-
-async function stopAndSubmit(generation: number): Promise<void> {
-  pendingStopGeneration = generation;
-  const recorder = mediaRecorder;
-  if (!recorder) {
-    return;
-  }
-  const blob = await new Promise<Blob>((resolve) => {
-    if (recorder.state === "inactive") {
-      resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" }));
-      return;
-    }
-    recorder.addEventListener(
-      "stop",
-      () => resolve(new Blob(chunks, { type: recorder.mimeType || "audio/webm" })),
-      { once: true },
-    );
-    recorder.stop();
-  });
-  await stopTracks(false);
-  pendingStopGeneration = null;
-  if (activeGeneration !== generation) {
-    return;
-  }
-  activeGeneration = null;
-  if (blob.size < 64) {
-    await window.poppy.submitAudio({ data: "", format: "webm", generation });
-    return;
-  }
-  const data = await blobToBase64(blob);
-  const format = (blob.type.split(";")[0] || "audio/webm").replace("audio/", "") || "webm";
-  await window.poppy.submitAudio({ data, format, generation });
-}
-
-async function stopTracks(resetGeneration = true): Promise<void> {
-  mediaRecorder = null;
-  mediaStream?.getTracks().forEach((track) => track.stop());
-  mediaStream = null;
-  chunks = [];
-  if (resetGeneration) {
-    activeGeneration = null;
-    pendingStopGeneration = null;
-  }
-}
-
-function pickMimeType(): string | undefined {
-  const candidates = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus"];
-  return candidates.find((type) => MediaRecorder.isTypeSupported(type));
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = String(reader.result ?? "");
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(blob);
-  });
-}
-
 minBtn.addEventListener("click", () => {
   void window.poppy.minimize();
 });
@@ -217,13 +117,13 @@ window.addEventListener(
 
 window.poppy.onState(render);
 window.poppy.onHotkeyDown(({ generation }) => {
-  void startRecording(generation);
+  void capture.start(generation);
 });
 window.poppy.onHotkeyUp(({ generation }) => {
-  void stopAndSubmit(generation);
+  void capture.stop(generation);
 });
 window.poppy.onHotkeyCancel(() => {
-  void stopTracks(true);
+  void capture.cancel();
 });
 
 void window.poppy.getState().then(render);
