@@ -59,7 +59,7 @@ export function defaultLauncherSize(resultCount: number): LauncherFitSize {
   };
 }
 
-/** Frameless glass window chrome. Vibrancy/acrylic are OS-specific and optional. */
+/** Transparent frameless surface. Frost lives on the glass frame in CSS, not the window. */
 export function launcherWindowChrome(platform: NodeJS.Platform): Record<string, string | boolean> {
   const chrome: Record<string, string | boolean> = {
     transparent: true,
@@ -67,12 +67,7 @@ export function launcherWindowChrome(platform: NodeJS.Platform): Record<string, 
     hasShadow: false,
   };
   if (platform === "darwin") {
-    chrome.vibrancy = "under-window";
-    chrome.visualEffectState = "active";
     chrome.roundedCorners = true;
-  }
-  if (platform === "win32") {
-    chrome.backgroundMaterial = "acrylic";
   }
   return chrome;
 }
