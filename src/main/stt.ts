@@ -18,11 +18,12 @@ import {
   releasePadMs,
   SEARCH_DEBOUNCE_MS,
   silencePcm16Base64,
+  STT_LANGUAGE_CODE,
   STT_MODEL,
   VAD_SILENCE_THRESHOLD_SECS,
 } from "../shared/stt-timing";
 
-export { STT_MODEL, VAD_SILENCE_THRESHOLD_SECS };
+export { STT_LANGUAGE_CODE, STT_MODEL, VAD_SILENCE_THRESHOLD_SECS };
 
 const AUDIO_FORMAT: Record<number, AudioFormat> = {
   8_000: AudioFormat.PCM_8000,
@@ -125,6 +126,7 @@ export async function connectScribe(input: { apiKey: string; sampleRate: number 
     modelId: STT_MODEL,
     audioFormat,
     sampleRate: input.sampleRate,
+    languageCode: STT_LANGUAGE_CODE,
     commitStrategy: CommitStrategy.VAD,
     vadSilenceThresholdSecs: VAD_SILENCE_THRESHOLD_SECS,
     minSpeechDurationMs: 50,

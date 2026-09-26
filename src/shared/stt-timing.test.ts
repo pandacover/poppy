@@ -11,7 +11,14 @@ import {
   silencePcm16Base64,
   LOCAL_SILENCE_MS,
   SCRIBE_MIN_AUDIO_MS,
+  STT_LANGUAGE_CODE,
 } from "./stt-timing";
+
+describe("STT_LANGUAGE_CODE", () => {
+  it("locks Scribe realtime to ISO 639-1 English", () => {
+    assert.equal(STT_LANGUAGE_CODE, "en");
+  });
+});
 
 describe("nearestPcmSampleRate", () => {
   it("maps common AudioContext rates exactly", () => {
