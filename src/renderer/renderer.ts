@@ -1,4 +1,5 @@
 import { createVoiceCapture } from "./capture";
+import { escapeAction } from "../shared/escape-action";
 import type { AppState } from "../shared/types";
 
 const searchBar = document.querySelector("#search-bar") as HTMLElement;
@@ -284,10 +285,12 @@ if (hasPoppy) {
 
   window.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
-      if (current && pageOpen(current)) {
+      event.preventDefault();
+      if (escapeAction(current?.phase) === "back-to-results") {
         void window.poppy.closePage();
       } else {
         void window.poppy.cancelListen();
+        void window.poppy.minimize();
       }
       return;
     }
