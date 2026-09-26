@@ -37,7 +37,7 @@ npm run dev
 
 Hold **Ctrl+Shift+Space** (⌘⇧Space on macOS), speak a query, release. After results appear, hold the same shortcut and say `3`, `three`, or `number three` to open that row **inside Poppy**. You can also click a row or press `1`–`5` while the window is focused.
 
-On an open page, **Results** (or Escape) returns to the list. The same hotkey still starts a new search. Hide the window with the title-bar button; the app stays running so the hotkey still works. Quit from the menu (`Ctrl+Q` / `Cmd+Q`).
+On an open page, **Results** (or Escape) returns to the list. Escape from idle or the results list minimizes the launcher. The close (X) button hides the window without quitting so the hotkey still works. Quit from the menu (`Ctrl+Q` / `Cmd+Q`).
 
 ## Hotkey
 
@@ -85,7 +85,7 @@ Poppy does **not** call a paid search API. It loads DuckDuckGo’s public HTML r
 
 After load, Poppy reads organic title / URL / snippet rows from the markup, drops ads/sponsored blocks (`result--ad`, `badge--ad`, `data-nrn="ad"`, `y.js` trackers) as best it can, and keeps the top 5.
 
-Picking a result (spoken number, click, or `1`–`5`) loads that URL in an in-app `WebContentsView` (Electron’s BrowserView successor) in the same window — not the system browser. Only `http:` / `https:` URLs are allowed; other schemes show the existing unsafe-URL error. Target=_blank links stay in that view. **Results** or Escape closes the page and restores the launcher.
+Picking a result (spoken number, click, or `1`–`5`) loads that URL in an in-app `WebContentsView` (Electron’s BrowserView successor) in the same window — not the system browser. Only `http:` / `https:` URLs are allowed; other schemes show the existing unsafe-URL error. Target=_blank links stay in that view. **Results** or Escape closes the page and restores the launcher. Escape again from that list (or from idle) minimizes the window.
 
 This scrape can break when:
 
