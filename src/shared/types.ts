@@ -12,6 +12,7 @@ export type AppPhase =
   | "searching"
   | "results"
   | "opening"
+  | "page"
   | "error";
 
 export type CaptureMode = "query" | "pick";
@@ -25,6 +26,8 @@ export interface AppState {
   error: string | null;
   hotkeyLabel: string;
   apiKeyConfigured: boolean;
+  pageUrl: string | null;
+  pageTitle: string | null;
 }
 
 export type CaptureFailure = "empty" | "silent" | "muted";

@@ -102,6 +102,59 @@ body {
   border-radius: 2px;
 }
 
+.pagebar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+  -webkit-app-region: drag;
+  user-select: none;
+}
+
+.pagebar[hidden] {
+  display: none;
+}
+
+.pagebar button {
+  -webkit-app-region: no-drag;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg-elev);
+  color: var(--ink);
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pagebar button:hover {
+  border-color: rgba(232, 93, 76, 0.4);
+  color: var(--poppy);
+}
+
+.page-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.page-title.is-error {
+  color: var(--danger);
+}
+
+#app[data-page="open"] main {
+  display: none;
+}
+
 main {
   flex: 1;
   overflow: auto;
