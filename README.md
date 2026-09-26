@@ -31,7 +31,7 @@ The key is read only in the Electron **main** process. It is never shipped to th
 npm run dev
 ```
 
-`npm start` does the same (build, then launch). `npm test` runs parser unit tests. `npm run build` compiles to `dist/` without launching.
+`npm start` does the same (build, then launch). `npm test` runs unit tests. `npm run build` compiles to `dist/` without launching.
 
 Hold **Ctrl+Shift+Space** (⌘⇧Space on macOS), speak a query, release. After results appear, hold the same shortcut and say `3`, `three`, or `number three` to open that row in your default browser. You can also click a row or press `1`–`5` while the window is focused.
 
@@ -53,11 +53,13 @@ Hold-to-speak: the shortcut starts capture on key-down. Poppy then unregisters i
 
 ## Speech-to-text
 
-Audio is recorded in the renderer, sent to main as base64, and posted to:
+The renderer captures PCM from the microphone and encodes **16-bit mono WAV** (OpenRouter’s safest transcription container). Main posts that as base64 to:
 
 `POST https://openrouter.ai/api/v1/audio/transcriptions`
 
-with model `openai/whisper-large-v3-turbo` and `input_audio: { data, format }`.
+with model `openai/whisper-large-v3-turbo` and `input_audio: { data, format: "wav" }`. The OpenRouter key stays in the main process.
+
+Chromium `MediaRecorder` WebM/Opus — especially `start(timeslice)` on Linux — is not used for the happy path. Those files are often accepted with HTTP 200 and an empty `text` field.
 
 ## Search
 
@@ -84,13 +86,16 @@ Poppy detects captcha and consent pages and shows a clear error instead of hangi
 src/main       main process: hotkey, STT, search, openExternal
 src/preload    contextBridge API
 src/renderer   UI (listening pill, numbered results)
-src/shared     parsers and types (unit-tested)
+src/shared     parsers, audio helpers, and types (unit-tested)
 ```
 
 ## Troubleshooting
 
 - **Missing key** — copy `.env.example` to `.env` in the project root (the directory you run `npm run dev` from).
 - **Mic denied** — grant microphone access to Poppy / Electron in OS settings and try again.
-- **STT failure** — check the key, OpenRouter credits, and network; very short holds may not capture enough audio.
+- **No audio was captured** — the hold ended before Poppy had PCM (very short tap, or the recorder had not started). Hold the hotkey until you finish speaking.
+- **Microphone produced silence** — the stream was live but digital-zero. On Linux this is often a PulseAudio/PipeWire **monitor/loopback** source rather than the real mic. In system sound settings, set the default input to the physical microphone (not “Monitor of …”).
+- **Whisper returned an empty transcript** — audio reached OpenRouter but the model returned no text. Speak a bit longer, check the mic is not muted, and confirm OpenRouter credits. HTTP/key/network failures show their own messages instead of this one.
+- **STT HTTP / network failure** — check `OPENROUTER_API_KEY`, credits, and connectivity. Main logs `[poppy:stt]` with format, byte size, and HTTP status (never the key or audio).
 - **Google CAPTCHA / consent / empty results** — this is a page scrape, not an API. Try later, from a normal residential network, or after Google stops showing an interstitial.
 - **Hotkey does nothing** — another app owns that combo, or the window manager ate it. Set `POPPY_HOTKEY`.

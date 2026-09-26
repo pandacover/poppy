@@ -13,12 +13,15 @@ import { createHoldHotkey } from "./hotkey";
 import { disposeScraper, searchWeb } from "./search";
 import { transcribeAudio } from "./stt";
 import { formatHotkeyLabel } from "../shared/hotkey";
+import { messageForCapturePayload } from "../shared/capture-errors";
 import { parseSpokenIndex } from "../shared/parse-number";
 import type { AppState, AudioPayload } from "../shared/types";
 
 loadEnv(process.cwd());
 app.setName("Poppy");
 app.disableHardwareAcceleration();
+// Hold-to-speak is triggered by a global shortcut, not a page gesture.
+app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
@@ -68,6 +71,7 @@ function createWindow(): BrowserWindow {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      autoplayPolicy: "no-user-gesture-required",
     },
   });
 
@@ -145,10 +149,12 @@ async function handleAudio(payload: AudioPayload & { generation?: number }): Pro
   if (payload.generation != null && payload.generation !== listenGeneration) {
     return;
   }
-  if (!payload?.data) {
+  const captureError = messageForCapturePayload(payload);
+  if (captureError) {
+    console.info("[poppy:capture]", payload.error ?? "missing-data", "generation", payload.generation);
     setState({
       phase: state.results.length > 0 ? "results" : "idle",
-      error: "Didn't catch that. Hold the hotkey and try again.",
+      error: captureError,
     });
     return;
   }
