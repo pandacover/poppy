@@ -30,3 +30,8 @@ export function pageViewBounds(contentWidth: number, contentHeight: number): Vie
     height: Math.max(0, Math.floor(contentHeight) - y),
   };
 }
+
+/** Chromium may abort the first load if the view is still 0×0 after window expand. */
+export function pageViewIsLaidOut(bounds: Pick<ViewBounds, "width" | "height">): boolean {
+  return bounds.width > 0 && bounds.height > 0;
+}

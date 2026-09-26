@@ -104,4 +104,5 @@ src/shared     parsers, audio helpers, and types (unit-tested)
 - **Whisper returned an empty transcript** — audio reached OpenRouter but the model returned no text. Speak a bit longer and confirm OpenRouter credits. HTTP/key/network failures show their own messages instead of this one.
 - **STT HTTP / network failure** — check `OPENROUTER_API_KEY`, credits, and connectivity. Main logs `[poppy:stt]` with format, byte size, and HTTP status (never the key or audio).
 - **DuckDuckGo bot check / empty results** — this is a page scrape, not an API. Try later, from a normal residential network. There is no Google CAPTCHA path in this build.
+- **Could not load that page** — the in-app view failed a real load (DNS, TLS, or the host refused). Cancelled first navigations — expanding the window, attaching `WebContentsView`, or replacing `about:blank` (`ERR_ABORTED` / `-3`) — are retried or ignored and should not show this.
 - **Hotkey does nothing** — another app owns that combo, or the window manager ate it. Set `POPPY_HOTKEY`.
