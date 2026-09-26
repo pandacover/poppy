@@ -7,11 +7,11 @@ import {
   systemPreferences,
 } from "electron";
 import { join } from "node:path";
-import { getHotkeyAccelerator, getOpenRouterApiKey, loadEnv } from "./env";
+import { getHotkeyAccelerator, getElevenLabsApiKey, loadEnv } from "./env";
 import { createHoldHotkey } from "./hotkey";
 import { createPageView } from "./page-view";
 import { disposeScraper, searchWeb } from "./search";
-import { transcribeAudio } from "./stt";
+import { connectScribe, createRealtimeSession, type RealtimeSession } from "./stt";
 import { formatHotkeyLabel } from "../shared/hotkey";
 import { CAPTURE_ERROR, messageForCapturePayload } from "../shared/capture-errors";
 import {
@@ -25,7 +25,7 @@ import {
 } from "../shared/page-layout";
 import { parseSpokenIndex } from "../shared/parse-number";
 import { resultOpenError } from "../shared/safe-url";
-import type { AppState, AudioPayload } from "../shared/types";
+import type { AppState, AudioPayload, PcmChunkPayload } from "../shared/types";
 
 loadEnv(process.cwd());
 app.setName("Poppy");
@@ -41,6 +41,10 @@ let isQuitting = false;
 let listenGeneration = 0;
 let awaitingCapture = false;
 let hold: ReturnType<typeof createHoldHotkey> | null = null;
+let sttSession: RealtimeSession | null = null;
+const sttWork = new Map<number, Promise<void>>();
+const MISSING_KEY =
+  "Missing ELEVENLABS_API_KEY. Copy .env.example to .env and add your key.";
 const pageView = createPageView(
   () => mainWindow,
   {
@@ -82,10 +86,20 @@ const state: AppState = {
   results: [],
   error: null,
   hotkeyLabel: formatHotkeyLabel(accelerator, process.platform),
-  apiKeyConfigured: Boolean(getOpenRouterApiKey()),
+  apiKeyConfigured: Boolean(getElevenLabsApiKey()),
   pageUrl: null,
   pageTitle: null,
 };
+
+function queueStt(generation: number, work: () => void | Promise<void>): void {
+  const previous = sttWork.get(generation) ?? Promise.resolve();
+  const next = previous
+    .then(work)
+    .catch((error) => {
+      console.info("[poppy:stt]", error instanceof Error ? error.message : error);
+    });
+  sttWork.set(generation, next);
+}
 
 function sendState(): void {
   mainWindow?.webContents.send("state:update", { ...state, results: [...state.results] });
@@ -186,8 +200,25 @@ function attachIpc(): void {
   ipcMain.handle("listen:cancel", () => {
     cancelListening();
   });
-  ipcMain.handle("audio:submit", async (_event, payload: AudioPayload & { generation?: number }) => {
-    await handleAudio(payload);
+  ipcMain.handle("audio:submit", (_event, payload: AudioPayload & { generation?: number }) => {
+    const generation = payload?.generation ?? listenGeneration;
+    if (payload.generation != null && payload.generation !== listenGeneration) {
+      return;
+    }
+    queueStt(generation, () => handleCaptureFailure(payload));
+  });
+  ipcMain.on("audio:chunk", (_event, payload: PcmChunkPayload) => {
+    if (!payload || payload.generation !== listenGeneration) {
+      return;
+    }
+    queueStt(payload.generation, () => handleAudioChunk(payload));
+  });
+  ipcMain.on("audio:end", (_event, payload: { generation?: number }) => {
+    const generation = payload?.generation;
+    if (generation != null && generation !== listenGeneration) {
+      return;
+    }
+    queueStt(generation ?? listenGeneration, () => handleAudioEnd(payload));
   });
   ipcMain.handle("results:open", async (_event, index: number) => {
     await openResult(index);
@@ -203,6 +234,8 @@ function attachIpc(): void {
   });
   ipcMain.handle("mic:error", (_event, message: string) => {
     awaitingCapture = false;
+    sttSession?.abort();
+    sttSession = null;
     hold?.cancel();
     setState({
       phase: state.results.length > 0 ? "results" : "error",
@@ -233,9 +266,12 @@ function startListening(): void {
   listenGeneration += 1;
   const generation = listenGeneration;
   awaitingCapture = false;
+  sttSession?.abort();
+  sttSession = null;
   setState({
     phase: "listening",
     error: null,
+    lastTranscript: null,
     pageUrl: null,
     pageTitle: null,
   });
@@ -246,9 +282,9 @@ function stopListening(): void {
   if (state.phase !== "listening") {
     return;
   }
-  // Stay on "listening" until the renderer submits audio or a capture error.
-  // That way mute/silence can be shown before STT, and a warning shown while
-  // holding is not wiped by a premature "Transcribing" state.
+  // Stay on "listening" until the renderer streams audio, ends, or reports a
+  // capture error. Mute/silence can be shown before STT; a warning while holding
+  // is not wiped by a premature "Transcribing" state.
   awaitingCapture = true;
   mainWindow?.webContents.send("hotkey:up", { generation: listenGeneration });
 }
@@ -256,6 +292,8 @@ function stopListening(): void {
 function cancelListening(): void {
   listenGeneration += 1;
   awaitingCapture = false;
+  sttSession?.abort();
+  sttSession = null;
   hold?.cancel();
   mainWindow?.webContents.send("hotkey:cancel");
   if (pageView.isOpen() || state.phase === "page" || state.phase === "opening") {
@@ -268,11 +306,13 @@ function cancelListening(): void {
   });
 }
 
-async function handleAudio(payload: AudioPayload & { generation?: number }): Promise<void> {
+async function handleCaptureFailure(payload: AudioPayload & { generation?: number }): Promise<void> {
   if (payload.generation != null && payload.generation !== listenGeneration) {
     return;
   }
   awaitingCapture = false;
+  sttSession?.abort();
+  sttSession = null;
   const captureError = messageForCapturePayload(payload);
   if (captureError) {
     console.info("[poppy:capture]", payload.error ?? "missing-data", "generation", payload.generation);
@@ -282,30 +322,89 @@ async function handleAudio(payload: AudioPayload & { generation?: number }): Pro
     });
     return;
   }
+}
 
-  const apiKey = getOpenRouterApiKey();
+function ensureSttSession(generation: number): RealtimeSession | null {
+  const apiKey = getElevenLabsApiKey();
   if (!apiKey) {
+    awaitingCapture = false;
     setState({
       phase: "error",
       apiKeyConfigured: false,
-      error: "Missing OPENROUTER_API_KEY. Copy .env.example to .env and add your key.",
+      error: MISSING_KEY,
     });
+    return null;
+  }
+  if (sttSession && sttSession.generation === generation) {
+    return sttSession;
+  }
+  sttSession?.abort();
+  sttSession = createRealtimeSession({
+    apiKey,
+    generation,
+    connect: connectScribe,
+    onPartial: (text) => {
+      if (generation !== listenGeneration) {
+        return;
+      }
+      if (state.phase === "listening" || state.phase === "transcribing") {
+        setState({ lastTranscript: text, error: null, apiKeyConfigured: true });
+      }
+    },
+    onSettled: (text) => {
+      void handleSettledTranscript(text, generation);
+    },
+    onError: (error) => {
+      if (generation !== listenGeneration) {
+        return;
+      }
+      awaitingCapture = false;
+      sttSession = null;
+      setState({
+        phase: state.results.length > 0 ? "results" : "error",
+        error: error.message || "Speech-to-text failed.",
+      });
+    },
+  });
+  return sttSession;
+}
+
+async function handleAudioChunk(payload: PcmChunkPayload): Promise<void> {
+  if (payload.generation !== listenGeneration) {
     return;
   }
+  if (!payload.pcm16 || typeof payload.sampleRate !== "number") {
+    return;
+  }
+  const session = ensureSttSession(payload.generation);
+  if (!session) {
+    return;
+  }
+  await session.push({ pcm16: payload.pcm16, sampleRate: payload.sampleRate });
+}
 
-  setState({ phase: "transcribing", error: null, apiKeyConfigured: true });
-
-  let transcript: string;
-  try {
-    transcript = await transcribeAudio(apiKey, payload);
-  } catch (error) {
+function handleAudioEnd(payload: { generation?: number }): void {
+  if (payload.generation != null && payload.generation !== listenGeneration) {
+    return;
+  }
+  awaitingCapture = false;
+  if (!sttSession || sttSession.generation !== listenGeneration) {
     setState({
       phase: state.results.length > 0 ? "results" : "error",
-      error: error instanceof Error ? error.message : "Speech-to-text failed.",
+      error: CAPTURE_ERROR.emptyAudio,
     });
     return;
   }
+  setState({ phase: "transcribing", error: null, apiKeyConfigured: true });
+  sttSession.release();
+}
 
+async function handleSettledTranscript(transcript: string, generation: number): Promise<void> {
+  if (generation !== listenGeneration) {
+    return;
+  }
+  awaitingCapture = false;
+  sttSession = null;
   setState({ lastTranscript: transcript });
 
   if (state.mode === "pick" && state.results.length > 0) {
@@ -481,7 +580,7 @@ function buildMenu(): void {
 
 app.whenReady().then(async () => {
   loadEnv(app.getAppPath());
-  state.apiKeyConfigured = Boolean(getOpenRouterApiKey());
+  state.apiKeyConfigured = Boolean(getElevenLabsApiKey());
   session.defaultSession.setPermissionRequestHandler((_contents, permission, callback) => {
     callback(allowMediaPermission(permission));
   });
@@ -493,7 +592,7 @@ app.whenReady().then(async () => {
 
   if (!state.apiKeyConfigured) {
     state.phase = "error";
-    state.error = "Missing OPENROUTER_API_KEY. Copy .env.example to .env and add your key.";
+    state.error = MISSING_KEY;
   }
 
   attachIpc();
@@ -522,6 +621,8 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  sttSession?.abort();
+  sttSession = null;
   hold?.unregister();
   pageView.close();
   disposeScraper();

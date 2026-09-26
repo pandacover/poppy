@@ -11,10 +11,12 @@ import {
   MUTE_HINT_SECONDS,
 } from "../shared/evaluate-capture";
 import { classifyGetUserMediaError } from "../shared/media-errors";
-import type { AudioPayload } from "../shared/types";
-import { concatFloat32, encodePcm16Wav, mixDownToMono, peakAmplitude, rmsAmplitude } from "../shared/wav";
+import type { AudioPayload, PcmChunkPayload } from "../shared/types";
+import { concatFloat32, encodePcm16, mixDownToMono, peakAmplitude, rmsAmplitude } from "../shared/wav";
 
 interface VoiceCaptureCallbacks {
+  sendChunk: (payload: PcmChunkPayload) => void;
+  endAudio: (payload: { generation: number }) => void;
   submitAudio: (payload: AudioPayload & { generation: number }) => Promise<void>;
   reportMicError: (message: string) => Promise<void>;
   reportMicWarning: (message: string) => Promise<void>;
@@ -27,24 +29,36 @@ interface PcmSession {
 /**
  * Hold-to-speak capture.
  *
- * Chromium MediaRecorder on Linux (especially `start(timeslice)` WebM/Opus)
- * often yields a container OpenRouter Whisper accepts with HTTP 200 and empty
- * `text`. We record PCM through AudioContext and encode 16-bit mono WAV
- * instead. MediaRecorder is only a fallback, and even then we decode back to
- * PCM before encoding WAV.
+ * The renderer records PCM through AudioContext and streams 16-bit mono chunks
+ * to main, which forwards them to ElevenLabs Scribe v2 Realtime. Mute, permission,
+ * and digital-silence checks happen locally so we never send a muted or silent
+ * stream to STT.
  *
- * Permission denial, missing hardware, OS mute, and digital silence are
- * reported as distinct errors. A muted/silent warning can appear while the
- * hotkey is still held; capture still stops on release without needing a click.
+ * MediaRecorder is only a fallback; even then we decode back to PCM before
+ * streaming (at stop, if live chunks were not available).
  */
 export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
   let activeGeneration: number | null = null;
   let pendingStopGeneration: number | null = null;
   let session: PcmSession | null = null;
+  let streamed = false;
+
+  function emitChunk(generation: number, samples: Float32Array, sampleRate: number): void {
+    if (samples.length === 0) {
+      return;
+    }
+    streamed = true;
+    callbacks.sendChunk({
+      generation,
+      pcm16: arrayBufferToBase64(encodePcm16(samples)),
+      sampleRate,
+    });
+  }
 
   async function start(generation: number): Promise<void> {
     await teardown();
     activeGeneration = generation;
+    streamed = false;
 
     let stream: MediaStream;
     try {
@@ -78,11 +92,19 @@ export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
     track?.addEventListener("mute", warnIfMuted);
 
     try {
-      session = await startPcmSession(stream, () => {
-        if (activeGeneration === generation) {
-          void callbacks.reportMicWarning(CAPTURE_ERROR.silentMic);
-        }
-      });
+      session = await startPcmSession(
+        stream,
+        () => {
+          if (activeGeneration === generation) {
+            void callbacks.reportMicWarning(CAPTURE_ERROR.silentMic);
+          }
+        },
+        (samples, sampleRate) => {
+          if (activeGeneration === generation) {
+            emitChunk(generation, samples, sampleRate);
+          }
+        },
+      );
     } catch {
       if (activeGeneration !== generation) {
         stopTracks(stream);
@@ -133,24 +155,23 @@ export function createVoiceCapture(callbacks: VoiceCaptureCallbacks) {
     if (!verdict.ok) {
       await callbacks.submitAudio({
         data: "",
-        format: "wav",
+        format: "pcm16",
         generation,
         error: verdict.reason,
       });
       return;
     }
 
-    const wav = encodePcm16Wav(samples, sampleRate);
-    await callbacks.submitAudio({
-      data: arrayBufferToBase64(wav),
-      format: "wav",
-      generation,
-    });
+    if (!streamed) {
+      emitChunk(generation, samples, sampleRate);
+    }
+    callbacks.endAudio({ generation });
   }
 
   async function cancel(): Promise<void> {
     activeGeneration = null;
     pendingStopGeneration = null;
+    streamed = false;
     await teardown();
   }
 
@@ -251,6 +272,7 @@ async function openMicrophone(onWarning: (message: string) => void): Promise<Med
 async function startPcmSession(
   stream: MediaStream,
   onLowLevel: () => void,
+  onPcm: (samples: Float32Array, sampleRate: number) => void,
 ): Promise<PcmSession> {
   const AudioContextCtor =
     window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
@@ -272,21 +294,23 @@ async function startPcmSession(
     let sumSquares = 0;
     let sampleTotal = 0;
     let hinted = false;
+    let heardSpeech = false;
     const processor = ctx.createScriptProcessor(4096, 1, 1);
     processor.onaudioprocess = (event) => {
       if (stopped) {
         return;
       }
-      const data = event.inputBuffer.getChannelData(0);
-      chunks.push(new Float32Array(data));
+      const data = new Float32Array(event.inputBuffer.getChannelData(0));
+      chunks.push(data);
       for (let i = 0; i < data.length; i += 1) {
         const sample = data[i] ?? 0;
         sumSquares += sample * sample;
       }
       sampleTotal += data.length;
       const elapsed = sampleTotal / (ctx.sampleRate || 16_000);
+      const muted = stream.getAudioTracks().some((track) => track.muted);
       if (!hinted && elapsed >= MUTE_HINT_SECONDS) {
-        if (stream.getAudioTracks().some((track) => track.muted)) {
+        if (muted) {
           hinted = true;
           return;
         }
@@ -296,6 +320,16 @@ async function startPcmSession(
           onLowLevel();
         }
       }
+      if (muted) {
+        return;
+      }
+      const peak = peakAmplitude(data);
+      const rms = rmsAmplitude(data);
+      if (!heardSpeech && isNearSilent(rms, peak)) {
+        return;
+      }
+      heardSpeech = true;
+      onPcm(data, ctx.sampleRate || 16_000);
     };
 
     // Pull the graph without playing to speakers (a playback stream can
@@ -345,7 +379,8 @@ async function startMediaRecorderSession(
       chunks.push(event.data);
     }
   });
-  // No timeslice: Chromium's 100ms WebM clusters are often unreadable by Whisper.
+  // No timeslice: live streaming uses AudioContext PCM. This fallback dumps
+  // decoded PCM at stop so main can still transcribe.
   recorder.start();
 
   return {

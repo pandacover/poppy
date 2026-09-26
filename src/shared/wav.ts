@@ -9,6 +9,16 @@ function floatToPcm16(sample: number): number {
   return s < 0 ? Math.round(s * 0x8000) : Math.round(s * 0x7fff);
 }
 
+/** 16-bit little-endian mono PCM (no container). */
+export function encodePcm16(samples: ArrayLike<number>): ArrayBuffer {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0, offset = 0; i < samples.length; i += 1, offset += 2) {
+    view.setInt16(offset, floatToPcm16(samples[i] ?? 0), true);
+  }
+  return buffer;
+}
+
 /** Concatenate PCM chunks without flattening via spread (avoids call-stack limits). */
 export function concatFloat32(chunks: Float32Array[]): Float32Array {
   let total = 0;
@@ -68,7 +78,7 @@ export function rmsAmplitude(samples: ArrayLike<number>): number {
   return Math.sqrt(sumSquares / samples.length);
 }
 
-/** 16-bit mono PCM WAV. Whisper providers treat this as the safest container. */
+/** 16-bit mono PCM WAV. Kept for tests and any fallback that still needs a container. */
 export function encodePcm16Wav(samples: ArrayLike<number>, sampleRate: number): ArrayBuffer {
   const rate = Math.max(1, Math.round(sampleRate));
   const dataBytes = samples.length * 2;

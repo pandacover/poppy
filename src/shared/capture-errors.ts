@@ -14,9 +14,9 @@ export const CAPTURE_ERROR = {
   silentMic:
     "Microphone is muted or producing silence. Unmute it in OS sound settings, or pick a different input device — not a monitor or loopback.",
   emptyTranscript:
-    "Whisper returned an empty transcript. The recording may still be too quiet, or the speech wasn't recognized.",
+    "Speech-to-text returned an empty transcript. The recording may still be too quiet, or the speech wasn't recognized.",
   timeout: "Speech-to-text timed out. Try a shorter query.",
-  network: "Could not reach OpenRouter. Check your network connection.",
+  network: "Could not reach ElevenLabs. Check your network connection.",
   captureFailed: "Could not start audio capture. Check the microphone and try again.",
 } as const;
 

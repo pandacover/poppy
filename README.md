@@ -2,12 +2,12 @@
 
 Hold a hotkey, speak a search, pick a result by saying its number.
 
-Poppy is a small Electron launcher: it listens while you hold a global shortcut, transcribes with OpenRouter Whisper, shows the top 5 organic DuckDuckGo results, then opens the one you speak **inside the app**.
+Poppy is a small Electron launcher: it listens while you hold a global shortcut, transcribes with **ElevenLabs Scribe v2 Realtime**, shows the top 5 organic DuckDuckGo results, then opens the one you speak **inside the app**.
 
 ## Requirements
 
 - **Node.js 20+** (Node 22 is what we develop against; see `.nvmrc`)
-- An [OpenRouter API key](https://openrouter.ai/keys)
+- An [ElevenLabs API key](https://elevenlabs.io/app/settings/api-keys) with access to Scribe realtime speech-to-text
 - A microphone, and OS permission for this app to use it (unmuted, and set to a real input — not a monitor/loopback device)
 
 ## Setup
@@ -20,10 +20,12 @@ cp .env.example .env
 Edit `.env` and set:
 
 ```
-OPENROUTER_API_KEY=sk-or-...
+ELEVENLABS_API_KEY=sk_...
 ```
 
 The key is read only in the Electron **main** process. It is never shipped to the renderer.
+
+OpenRouter is **not** used. The previous Whisper Large V3 Turbo path (`OPENROUTER_API_KEY` + `POST /api/v1/audio/transcriptions`) has been removed.
 
 ## Run
 
@@ -53,15 +55,27 @@ Hold-to-speak: the shortcut starts capture on key-down. Poppy then unregisters i
 
 ## Speech-to-text
 
-The renderer captures PCM from the microphone and encodes **16-bit mono WAV** (OpenRouter’s safest transcription container). Main posts that as base64 to:
+The renderer captures PCM from the microphone and **streams 16-bit mono PCM** to the main process while you hold the hotkey. Main connects to ElevenLabs Realtime Speech-to-Text with `@elevenlabs/elevenlabs-js`:
 
-`POST https://openrouter.ai/api/v1/audio/transcriptions`
+`wss://api.elevenlabs.io/v1/speech-to-text/realtime?model_id=scribe_v2_realtime`
 
-with model `openai/whisper-large-v3-turbo` and `input_audio: { data, format: "wav" }`. The OpenRouter key stays in the main process.
+Model: `scribe_v2_realtime`. The ElevenLabs key stays in the main process (`xi-api-key` on that WebSocket). The renderer never sees it.
 
-Chromium `MediaRecorder` WebM/Opus — especially `start(timeslice)` on Linux — is not used for the happy path. Those files are often accepted with HTTP 200 and an empty `text` field.
+Partial transcripts update the launcher live. Search does **not** run on every partial.
 
-If the mic is muted, permission is denied, or the stream is digital silence, Poppy shows that error **before** calling Whisper.
+### Silence before search
+
+ElevenLabs VAD auto-commits after a pause. The API/SDK floor for `vad_silence_threshold_secs` is **0.3s** (range 0.3–3.0), so 250ms cannot be set on the wire. Poppy uses:
+
+1. **VAD commit** at **0.3s** of silence (closest allowed value)
+2. A **local 250ms wait on key-up** if there is still uncommitted audio, then a manual commit of the leftover
+3. Short holds are padded with silence up to ~2s of audio, because Scribe starts processing after about two seconds of stream
+
+### Search debounce
+
+DuckDuckGo is scraped only after a **settled/committed** query. Rapid commits (including near-duplicates like `cats near me` / `cats near me.`) are debounced for **250ms** and collapsed so one utterance cannot fire several scrapes.
+
+If the mic is muted, permission is denied, or the stream is digital silence, Poppy shows that error **before** opening the ElevenLabs socket (or aborts it if capture fails after streaming started).
 
 ## Search
 
@@ -96,15 +110,15 @@ src/shared     parsers, audio helpers, and types (unit-tested)
 
 ## Troubleshooting
 
-- **Missing key** — copy `.env.example` to `.env` in the project root (the directory you run `npm run dev` from).
+- **Missing key** — copy `.env.example` to `.env` in the project root (the directory you run `npm run dev` from) and set `ELEVENLABS_API_KEY`.
 - **Mic permission denied** — grant microphone access to Poppy / Electron in OS settings and try again. This is distinct from a muted mic: if permission is already granted, Poppy will not prompt again.
 - **Microphone is unavailable / none found** — no input device, or it is exclusive to another app. Plug in a mic or close the other app.
 - **Only monitor/loopback inputs** — the OS listed “Monitor of …” / Stereo Mix / loopback, not a real microphone. In system sound settings, pick the physical mic and unmute it.
 - **The microphone is muted** — permission was granted, but the capture track is muted (OS mute switch or hardware mute). Unmute and try again. Poppy may warn while you are still holding the hotkey.
-- **Microphone is muted or producing silence** — RMS stayed near digital zero while you held. Unmute the mic, or pick a different input — not a monitor or loopback. This is shown during or right after listen, before Whisper.
+- **Microphone is muted or producing silence** — RMS stayed near digital zero while you held. Unmute the mic, or pick a different input — not a monitor or loopback. This is shown during or right after listen, before ElevenLabs.
 - **No audio was captured** — the hold ended before Poppy had enough PCM (very short tap, or the recorder had not started). Hold the hotkey until you finish speaking.
-- **Whisper returned an empty transcript** — audio reached OpenRouter but the model returned no text. Speak a bit longer and confirm OpenRouter credits. HTTP/key/network failures show their own messages instead of this one.
-- **STT HTTP / network failure** — check `OPENROUTER_API_KEY`, credits, and connectivity. Main logs `[poppy:stt]` with format, byte size, and HTTP status (never the key or audio).
+- **Empty transcript** — audio reached ElevenLabs but Scribe returned no text. Speak a bit longer and confirm the key has Scribe realtime access. HTTP/key/network failures show their own messages instead of this one.
+- **STT network / auth failure** — check `ELEVENLABS_API_KEY`, credits, and connectivity. Main logs `[poppy:stt]` with model and sample rate (never the key or audio).
 - **DuckDuckGo bot check / empty results** — this is a page scrape, not an API. Try later, from a normal residential network. There is no Google CAPTCHA path in this build.
 - **Could not load that page** — the in-app view failed a real load (DNS, TLS, or the host refused). Cancelled first navigations — expanding the window, attaching `WebContentsView`, or replacing `about:blank` (`ERR_ABORTED` / `-3`) — are retried or ignored and should not show this.
 - **Hotkey does nothing** — another app owns that combo, or the window manager ate it. Set `POPPY_HOTKEY`.
