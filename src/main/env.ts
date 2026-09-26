@@ -16,8 +16,8 @@ export function loadEnv(appPath: string): void {
   }
 }
 
-export function getOpenRouterApiKey(): string | undefined {
-  const key = process.env.OPENROUTER_API_KEY?.trim();
+export function getElevenLabsApiKey(): string | undefined {
+  const key = process.env.ELEVENLABS_API_KEY?.trim();
   return key ? key : undefined;
 }
 

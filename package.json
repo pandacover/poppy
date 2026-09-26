@@ -16,6 +16,7 @@
     "test": "tsx --test src/shared/*.test.ts src/main/*.test.ts"
   },
   "dependencies": {
+    "@elevenlabs/elevenlabs-js": "^2.69.0",
     "cheerio": "^1.1.2",
     "dotenv": "^17.2.2"
   },

@@ -1,67 +1,220 @@
 import assert from "node:assert/strict";
-import { afterEach, describe, it } from "node:test";
+import { describe, it } from "node:test";
 import { CAPTURE_ERROR } from "../shared/capture-errors";
-import { transcribeAudio } from "./stt";
+import { arrayBufferToBase64 } from "../shared/base64";
+import type { DebounceTimers } from "../shared/search-debounce";
+import { createRealtimeSession, mapSttError, type RealtimeSocket } from "./stt";
 
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
-
-function mockJson(status: number, body: unknown): void {
-  globalThis.fetch = (async () =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { "Content-Type": "application/json" },
-    })) as typeof fetch;
+function pcmChunk(sampleRate = 16_000, bytes = 3200): { pcm16: string; sampleRate: number } {
+  return { pcm16: arrayBufferToBase64(new ArrayBuffer(bytes)), sampleRate };
 }
 
-describe("transcribeAudio", () => {
-  it("returns OpenRouter text on success", async () => {
-    mockJson(200, { text: "  cats near me ", usage: { seconds: 2 } });
-    const text = await transcribeAudio("sk-test", { data: "UklGRg==", format: "audio/wav" });
-    assert.equal(text, "cats near me");
+function manualTimers(): { timers: DebounceTimers; drain: () => void; tick: () => void } {
+  let nextId = 0;
+  const pending = new Map<number, { fn: () => void; ms: number }>();
+  const timers: DebounceTimers = {
+    setTimeout: (fn, ms) => {
+      const id = ++nextId;
+      pending.set(id, { fn, ms });
+      return id as unknown as ReturnType<typeof setTimeout>;
+    },
+    clearTimeout: (handle) => {
+      pending.delete(handle as unknown as number);
+    },
+  };
+  return {
+    timers,
+    drain() {
+      let steps = 0;
+      while (pending.size > 0 && steps < 20) {
+        steps += 1;
+        const first = pending.entries().next().value;
+        if (!first) {
+          return;
+        }
+        const [id, item] = first;
+        pending.delete(id);
+        item.fn();
+      }
+    },
+    tick() {
+      const first = pending.entries().next().value;
+      if (!first) {
+        return;
+      }
+      const [id, item] = first;
+      pending.delete(id);
+      item.fn();
+    },
+  };
+}
+
+class FakeSocket implements RealtimeSocket {
+  sent: { audioBase64: string; sampleRate?: number }[] = [];
+  commits = 0;
+  closed = false;
+  private listeners = new Map<string, Array<(data?: unknown) => void>>();
+
+  on(event: string, listener: (data?: unknown) => void): void {
+    const list = this.listeners.get(event) ?? [];
+    list.push(listener);
+    this.listeners.set(event, list);
+  }
+
+  emit(event: string, data?: unknown): void {
+    for (const listener of this.listeners.get(event) ?? []) {
+      listener(data);
+    }
+  }
+
+  send(data: { audioBase64: string; sampleRate?: number }): void {
+    this.sent.push(data);
+  }
+
+  commit(): void {
+    this.commits += 1;
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
+describe("mapSttError", () => {
+  it("maps auth failures to the ElevenLabs key message", () => {
+    assert.match(
+      mapSttError({ message_type: "auth_error", error: "invalid" }).message,
+      /ELEVENLABS_API_KEY/,
+    );
   });
 
-  it("sends wav when the renderer MIME includes codecs", async () => {
-    let format: string | undefined;
-    globalThis.fetch = (async (_url: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body ?? "{}")) as {
-        input_audio?: { format?: string };
-      };
-      format = body.input_audio?.format;
-      return new Response(JSON.stringify({ text: "ok" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    }) as typeof fetch;
-    await transcribeAudio("sk-test", { data: "UklGRg==", format: "wav" });
-    assert.equal(format, "wav");
+  it("maps empty activity to the empty-transcript copy", () => {
+    assert.equal(
+      mapSttError({ message_type: "insufficient_audio_activity", error: "none" }).message,
+      CAPTURE_ERROR.emptyTranscript,
+    );
   });
 
-  it("throws a specific error when the provider returns empty text", async () => {
-    mockJson(200, { text: "  ", usage: { seconds: 5.1 } });
-    await assert.rejects(
-      () => transcribeAudio("sk-test", { data: "UklGRg==", format: "wav" }),
-      (error: unknown) => {
-        assert.equal(error instanceof Error && error.message, CAPTURE_ERROR.emptyTranscript);
-        return true;
+  it("maps network-ish websocket errors", () => {
+    assert.equal(mapSttError(new Error("WebSocket is not connected")).message, CAPTURE_ERROR.network);
+  });
+});
+
+describe("createRealtimeSession", () => {
+  it("updates partials live and searches once on a settled commit after release", async () => {
+    const { timers, drain } = manualTimers();
+    const socket = new FakeSocket();
+    const partials: string[] = [];
+    const settled: string[] = [];
+    const session = createRealtimeSession({
+      apiKey: "sk-test",
+      generation: 1,
+      connect: async () => socket,
+      onPartial: (text) => partials.push(text),
+      onSettled: (text) => settled.push(text),
+      onError: (error) => {
+        throw error;
       },
-    );
+      debounceMs: 250,
+      silenceMs: 250,
+      commitGraceMs: 400,
+      timers,
+    });
+
+    await session.push(pcmChunk());
+    socket.emit("open");
+    socket.emit("partial_transcript", { text: "best espresso" });
+    socket.emit("committed_transcript", { text: "best espresso in lisbon" });
+    assert.deepEqual(partials, ["best espresso", "best espresso in lisbon"]);
+    assert.deepEqual(settled, []);
+
+    session.release();
+    drain();
+    assert.deepEqual(settled, ["best espresso in lisbon"]);
+    assert.equal(socket.closed, true);
   });
 
-  it("surfaces HTTP failures instead of the empty-catch copy", async () => {
-    mockJson(400, { error: { message: "Invalid audio format" } });
-    await assert.rejects(
-      () => transcribeAudio("sk-test", { data: "UklGRg==", format: "webm" }),
-      /Invalid audio format/,
-    );
+  it("debounces duplicate commits so search runs once", async () => {
+    const { timers, drain } = manualTimers();
+    const socket = new FakeSocket();
+    const settled: string[] = [];
+    const session = createRealtimeSession({
+      apiKey: "sk-test",
+      generation: 2,
+      connect: async () => socket,
+      onPartial: () => undefined,
+      onSettled: (text) => settled.push(text),
+      onError: (error) => {
+        throw error;
+      },
+      debounceMs: 250,
+      silenceMs: 250,
+      commitGraceMs: 400,
+      timers,
+    });
+
+    await session.push(pcmChunk());
+    socket.emit("open");
+    session.release();
+    socket.emit("committed_transcript", { text: "cats near me" });
+    socket.emit("committed_transcript", { text: "cats near me." });
+    drain();
+    assert.deepEqual(settled, ["cats near me"]);
   });
 
-  it("reads transcript text from verbose segments", async () => {
-    mockJson(200, { segments: [{ text: "number" }, { text: "three" }] });
-    const text = await transcribeAudio("sk-test", { data: "UklGRg==", format: "wav" });
-    assert.equal(text, "number three");
+  it("manual-commits leftover partials after the local silence wait", async () => {
+    const { timers, tick, drain } = manualTimers();
+    const socket = new FakeSocket();
+    const settled: string[] = [];
+    const session = createRealtimeSession({
+      apiKey: "sk-test",
+      generation: 3,
+      connect: async () => socket,
+      onPartial: () => undefined,
+      onSettled: (text) => settled.push(text),
+      onError: (error) => {
+        throw error;
+      },
+      debounceMs: 50,
+      silenceMs: 250,
+      commitGraceMs: 400,
+      timers,
+    });
+
+    await session.push(pcmChunk());
+    socket.emit("open");
+    socket.emit("partial_transcript", { text: "three" });
+    session.release();
+    assert.equal(socket.commits, 0);
+    tick();
+    assert.equal(socket.commits, 1);
+    socket.emit("committed_transcript", { text: "three" });
+    drain();
+    assert.deepEqual(settled, ["three"]);
+  });
+
+  it("does not search after abort", async () => {
+    const { timers, drain } = manualTimers();
+    const socket = new FakeSocket();
+    const settled: string[] = [];
+    const session = createRealtimeSession({
+      apiKey: "sk-test",
+      generation: 4,
+      connect: async () => socket,
+      onPartial: () => undefined,
+      onSettled: (text) => settled.push(text),
+      onError: (error) => {
+        throw error;
+      },
+      timers,
+    });
+
+    await session.push(pcmChunk());
+    socket.emit("open");
+    socket.emit("committed_transcript", { text: "should not search" });
+    session.abort();
+    session.release();
+    drain();
+    assert.deepEqual(settled, []);
   });
 });

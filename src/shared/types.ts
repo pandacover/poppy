@@ -40,6 +40,12 @@ export interface AudioPayload {
 }
 
 export const DEFAULT_HOTKEY = "CommandOrControl+Shift+Space";
-export const STT_MODEL = "openai/whisper-large-v3-turbo";
 export const MAX_RESULTS = 5;
 export const MAX_LISTEN_MS = 15_000;
+
+export interface PcmChunkPayload {
+  generation: number;
+  /** Base64-encoded 16-bit little-endian mono PCM (no WAV header). */
+  pcm16: string;
+  sampleRate: number;
+}

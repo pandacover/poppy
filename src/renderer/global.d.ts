@@ -1,4 +1,4 @@
-import type { AppState, AudioPayload } from "../shared/types";
+import type { AppState, AudioPayload, PcmChunkPayload } from "../shared/types";
 
 export interface PoppyApi {
   getState: () => Promise<AppState>;
@@ -6,6 +6,8 @@ export interface PoppyApi {
   onHotkeyDown: (callback: (payload: { generation: number }) => void) => () => void;
   onHotkeyUp: (callback: (payload: { generation: number }) => void) => () => void;
   onHotkeyCancel: (callback: () => void) => () => void;
+  sendAudioChunk: (payload: PcmChunkPayload) => void;
+  endAudio: (payload: { generation: number }) => void;
   submitAudio: (payload: AudioPayload & { generation: number }) => Promise<void>;
   openResult: (index: number) => Promise<void>;
   closePage: () => Promise<void>;

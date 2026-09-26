@@ -24,6 +24,8 @@ let fitRaf = 0;
 let slotRaf = 0;
 
 const capture = createVoiceCapture({
+  sendChunk: (payload) => window.poppy.sendAudioChunk(payload),
+  endAudio: (payload) => window.poppy.endAudio(payload),
   submitAudio: (payload) => window.poppy.submitAudio(payload),
   reportMicError: (message) => window.poppy.reportMicError(message),
   reportMicWarning: (message) => window.poppy.reportMicWarning(message),
@@ -34,14 +36,14 @@ function pageOpen(state: AppState): boolean {
 }
 
 function searchCopy(state: AppState): { text: string; placeholder: boolean } {
-  if (state.phase === "listening") {
+  if (state.phase === "listening" || state.phase === "transcribing") {
+    if (state.lastTranscript) {
+      return { text: state.lastTranscript, placeholder: false };
+    }
     return {
       text: state.mode === "pick" ? "Listening for a number…" : "Listening…",
       placeholder: false,
     };
-  }
-  if (state.phase === "transcribing") {
-    return { text: "Transcribing…", placeholder: false };
   }
   if (state.phase === "searching") {
     return { text: state.query || "Searching…", placeholder: false };
@@ -69,7 +71,7 @@ function hintCopy(state: AppState): string {
     return "";
   }
   if (state.phase === "transcribing") {
-    return "Sending audio to Whisper…";
+    return "Waiting for a short pause…";
   }
   if (state.phase === "searching") {
     return "Looking up organic results…";

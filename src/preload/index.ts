@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppState, AudioPayload } from "../shared/types";
+import type { AppState, AudioPayload, PcmChunkPayload } from "../shared/types";
 
 contextBridge.exposeInMainWorld("poppy", {
   getState: (): Promise<AppState> => ipcRenderer.invoke("state:get"),
@@ -31,6 +31,8 @@ contextBridge.exposeInMainWorld("poppy", {
     ipcRenderer.on("hotkey:cancel", listener);
     return () => ipcRenderer.removeListener("hotkey:cancel", listener);
   },
+  sendAudioChunk: (payload: PcmChunkPayload) => ipcRenderer.send("audio:chunk", payload),
+  endAudio: (payload: { generation: number }) => ipcRenderer.send("audio:end", payload),
   submitAudio: (payload: AudioPayload & { generation: number }) =>
     ipcRenderer.invoke("audio:submit", payload),
   openResult: (index: number) => ipcRenderer.invoke("results:open", index),

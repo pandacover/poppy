@@ -22,7 +22,7 @@ await Promise.all([
     outfile: join(dist, "main/index.js"),
     platform: "node",
     format: "cjs",
-    external: ["electron", "cheerio", "dotenv"],
+    external: ["electron", "cheerio", "dotenv", "@elevenlabs/elevenlabs-js"],
   }),
   esbuild.build({
     ...shared,

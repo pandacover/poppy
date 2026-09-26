@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   concatFloat32,
+  encodePcm16,
   encodePcm16Wav,
   mixDownToMono,
   peakAmplitude,
@@ -9,6 +10,17 @@ import {
   rmsAmplitude,
 } from "./wav";
 import { arrayBufferToBase64, base64ByteLength } from "./base64";
+
+describe("encodePcm16", () => {
+  it("writes little-endian 16-bit samples without a header", () => {
+    const buffer = encodePcm16(new Float32Array([0, 1, -1]));
+    const view = new DataView(buffer);
+    assert.equal(buffer.byteLength, 6);
+    assert.equal(view.getInt16(0, true), 0);
+    assert.equal(view.getInt16(2, true), 0x7fff);
+    assert.equal(view.getInt16(4, true), -0x8000);
+  });
+});
 
 describe("encodePcm16Wav", () => {
   it("writes a valid 16-bit mono RIFF header", () => {
