@@ -8,6 +8,7 @@ export interface PoppyApi {
   onHotkeyCancel: (callback: () => void) => () => void;
   submitAudio: (payload: AudioPayload & { generation: number }) => Promise<void>;
   openResult: (index: number) => Promise<void>;
+  closePage: () => Promise<void>;
   notifyKeyUp: (input: { key?: string; code?: string }) => Promise<void>;
   cancelListen: () => Promise<void>;
   reportMicError: (message: string) => Promise<void>;

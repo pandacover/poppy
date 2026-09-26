@@ -4,17 +4,24 @@ import {
   ipcMain,
   Menu,
   session,
-  shell,
   systemPreferences,
 } from "electron";
 import { join } from "node:path";
 import { getHotkeyAccelerator, getOpenRouterApiKey, loadEnv } from "./env";
 import { createHoldHotkey } from "./hotkey";
+import { createPageView } from "./page-view";
 import { disposeScraper, searchWeb } from "./search";
 import { transcribeAudio } from "./stt";
 import { formatHotkeyLabel } from "../shared/hotkey";
 import { CAPTURE_ERROR, messageForCapturePayload } from "../shared/capture-errors";
+import {
+  LAUNCHER_HEIGHT,
+  LAUNCHER_MIN_HEIGHT,
+  LAUNCHER_MIN_WIDTH,
+  LAUNCHER_WIDTH,
+} from "../shared/page-layout";
 import { parseSpokenIndex } from "../shared/parse-number";
+import { resultOpenError } from "../shared/safe-url";
 import type { AppState, AudioPayload } from "../shared/types";
 
 loadEnv(process.cwd());
@@ -28,6 +35,36 @@ let isQuitting = false;
 let listenGeneration = 0;
 let awaitingCapture = false;
 let hold: ReturnType<typeof createHoldHotkey> | null = null;
+const pageView = createPageView(
+  () => mainWindow,
+  {
+    onTitle: (title) => {
+      if (pageView.isOpen() && (state.phase === "page" || state.phase === "opening")) {
+        setState({ pageTitle: title });
+      }
+    },
+    onNavigated: (url) => {
+      if (pageView.isOpen() && (state.phase === "page" || state.phase === "opening")) {
+        setState({ pageUrl: url });
+      }
+    },
+    onFail: (message) => {
+      if (!pageView.isOpen()) {
+        return;
+      }
+      if (state.phase === "opening") {
+        closePage({ error: message });
+        return;
+      }
+      if (state.phase === "page") {
+        setState({ error: message });
+      }
+    },
+    onCloseRequest: () => {
+      closePage();
+    },
+  },
+);
 
 const accelerator = getHotkeyAccelerator();
 
@@ -40,6 +77,8 @@ const state: AppState = {
   error: null,
   hotkeyLabel: formatHotkeyLabel(accelerator, process.platform),
   apiKeyConfigured: Boolean(getOpenRouterApiKey()),
+  pageUrl: null,
+  pageTitle: null,
 };
 
 function sendState(): void {
@@ -55,17 +94,27 @@ function busyPhase(): boolean {
   return (
     awaitingCapture ||
     state.phase === "transcribing" ||
-    state.phase === "searching" ||
-    state.phase === "opening"
+    state.phase === "searching"
   );
+}
+
+function closePage(options?: { error?: string | null }): void {
+  pageView.close();
+  setState({
+    phase: state.results.length > 0 ? "results" : "idle",
+    mode: state.results.length > 0 ? "pick" : "query",
+    pageUrl: null,
+    pageTitle: null,
+    error: options?.error ?? null,
+  });
 }
 
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
-    width: 440,
-    height: 580,
-    minWidth: 380,
-    minHeight: 320,
+    width: LAUNCHER_WIDTH,
+    height: LAUNCHER_HEIGHT,
+    minWidth: LAUNCHER_MIN_WIDTH,
+    minHeight: LAUNCHER_MIN_HEIGHT,
     show: false,
     frame: false,
     backgroundColor: "#161411",
@@ -114,6 +163,9 @@ function attachIpc(): void {
   ipcMain.handle("results:open", async (_event, index: number) => {
     await openResult(index);
   });
+  ipcMain.handle("page:close", () => {
+    closePage();
+  });
   ipcMain.handle("mic:error", (_event, message: string) => {
     awaitingCapture = false;
     hold?.cancel();
@@ -133,6 +185,9 @@ function attachIpc(): void {
 }
 
 function startListening(): void {
+  if (pageView.isOpen() || state.phase === "page" || state.phase === "opening") {
+    pageView.close();
+  }
   if (microphoneAccessDenied()) {
     setState({
       phase: state.results.length > 0 ? "results" : "error",
@@ -146,6 +201,8 @@ function startListening(): void {
   setState({
     phase: "listening",
     error: null,
+    pageUrl: null,
+    pageTitle: null,
   });
   mainWindow?.webContents.send("hotkey:down", { generation, mode: state.mode });
 }
@@ -166,6 +223,10 @@ function cancelListening(): void {
   awaitingCapture = false;
   hold?.cancel();
   mainWindow?.webContents.send("hotkey:cancel");
+  if (pageView.isOpen() || state.phase === "page" || state.phase === "opening") {
+    closePage();
+    return;
+  }
   setState({
     phase: state.results.length > 0 ? "results" : "idle",
     error: null,
@@ -224,12 +285,17 @@ async function handleAudio(payload: AudioPayload & { generation?: number }): Pro
 }
 
 async function runSearch(query: string): Promise<void> {
+  if (pageView.isOpen()) {
+    pageView.close();
+  }
   setState({
     phase: "searching",
     mode: "query",
     query,
     error: null,
     results: [],
+    pageUrl: null,
+    pageTitle: null,
   });
   try {
     const results = await searchWeb(query);
@@ -260,25 +326,29 @@ async function runSearch(query: string): Promise<void> {
 
 async function openResult(index: number): Promise<void> {
   const result = state.results.find((item) => item.index === index);
-  if (!result) {
+  const openError = resultOpenError(result, state.results.length);
+  if (openError || !result) {
     setState({
       phase: "results",
-      error: `Say a number from 1 to ${state.results.length || 5}.`,
+      error: openError ?? `Say a number from 1 to ${state.results.length || 5}.`,
     });
     return;
   }
-  if (!/^https?:/i.test(result.url)) {
-    setState({ phase: "results", error: "That result has an unsafe URL." });
-    return;
-  }
-  setState({ phase: "opening", error: null });
+  setState({
+    phase: "opening",
+    error: null,
+    pageUrl: result.url,
+    pageTitle: result.title,
+  });
   try {
-    await shell.openExternal(result.url);
-    setState({ phase: "results", mode: "pick" });
+    await pageView.show(result.url);
+    if (state.phase !== "opening") {
+      return;
+    }
+    setState({ phase: "page", mode: "pick", error: null });
   } catch {
-    setState({
-      phase: "results",
-      error: "Could not open that link in your browser.",
+    closePage({
+      error: "Could not load that page.",
     });
   }
 }
@@ -404,6 +474,7 @@ app.whenReady().then(async () => {
 app.on("before-quit", () => {
   isQuitting = true;
   hold?.unregister();
+  pageView.close();
   disposeScraper();
 });
 

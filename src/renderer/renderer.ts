@@ -7,8 +7,12 @@ const hint = document.querySelector("#hint") as HTMLElement;
 const queryEl = document.querySelector("#query") as HTMLElement;
 const errorEl = document.querySelector("#error") as HTMLElement;
 const resultsEl = document.querySelector("#results") as HTMLOListElement;
+const pagebar = document.querySelector("#pagebar") as HTMLElement;
+const pageTitleEl = document.querySelector("#page-title") as HTMLElement;
+const backBtn = document.querySelector("#btn-back") as HTMLButtonElement;
 const minBtn = document.querySelector("#btn-min") as HTMLButtonElement;
 const hideBtn = document.querySelector("#btn-hide") as HTMLButtonElement;
+const appEl = document.querySelector("#app") as HTMLElement;
 
 let current: AppState | null = null;
 
@@ -24,14 +28,20 @@ const PHASE_LABEL: Record<AppState["phase"], string> = {
   transcribing: "Transcribing",
   searching: "Searching",
   results: "Results",
-  opening: "Opening",
+  opening: "Loading",
+  page: "Page",
   error: "Needs attention",
 };
+
+function pageOpen(state: AppState): boolean {
+  return state.phase === "page" || state.phase === "opening";
+}
 
 function render(state: AppState): void {
   current = state;
   pill.dataset.phase = state.phase;
   pillText.textContent = PHASE_LABEL[state.phase];
+  appEl.dataset.page = pageOpen(state) ? "open" : "";
 
   const hotkey = state.hotkeyLabel;
   if (state.phase === "listening") {
@@ -48,7 +58,9 @@ function render(state: AppState): void {
   } else if (state.phase === "searching") {
     hint.textContent = "Looking up organic results…";
   } else if (state.phase === "opening") {
-    hint.textContent = "Opening in your browser…";
+    hint.textContent = "Loading page inside Poppy…";
+  } else if (state.phase === "page") {
+    hint.textContent = `Back to results, or hold ${hotkey} to search again.`;
   } else {
     hint.textContent = `Hold ${hotkey} to try again.`;
   }
@@ -63,6 +75,13 @@ function render(state: AppState): void {
 
   errorEl.hidden = !state.error;
   errorEl.textContent = state.error ?? "";
+
+  const viewing = pageOpen(state);
+  pagebar.hidden = !viewing;
+  pageTitleEl.textContent = viewing
+    ? state.error || state.pageTitle || state.pageUrl || "Loading…"
+    : "";
+  pageTitleEl.classList.toggle("is-error", Boolean(viewing && state.error));
 
   resultsEl.replaceChildren();
   for (const result of state.results) {
@@ -97,10 +116,17 @@ minBtn.addEventListener("click", () => {
 hideBtn.addEventListener("click", () => {
   void window.poppy.hide();
 });
+backBtn.addEventListener("click", () => {
+  void window.poppy.closePage();
+});
 
 window.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
-    void window.poppy.cancelListen();
+    if (current && pageOpen(current)) {
+      void window.poppy.closePage();
+    } else {
+      void window.poppy.cancelListen();
+    }
     return;
   }
   if (current?.phase === "results" && /^[1-5]$/.test(event.key)) {
