@@ -1,10 +1,12 @@
 import { BrowserWindow, session, WebContentsView } from "electron";
 import { isTransientErrorCode, isTransientLoadError } from "../shared/load-error";
 import {
+  LAUNCHER_BACKGROUND,
   LAUNCHER_HEIGHT,
   LAUNCHER_MIN_HEIGHT,
   LAUNCHER_MIN_WIDTH,
   LAUNCHER_WIDTH,
+  PAGE_CHROME_BACKGROUND,
   PAGE_MIN_HEIGHT,
   PAGE_MIN_WIDTH,
   PAGE_WINDOW_HEIGHT,
@@ -249,6 +251,7 @@ export function createPageView(
     launcherSize = { width: bounds.width, height: bounds.height };
 
     win.setAlwaysOnTop(false);
+    win.setBackgroundColor(PAGE_CHROME_BACKGROUND);
     win.setMinimumSize(PAGE_MIN_WIDTH, PAGE_MIN_HEIGHT);
     win.setBounds({
       x: bounds.x,
@@ -269,7 +272,7 @@ export function createPageView(
         session: pageSession(),
       },
     });
-    next.setBackgroundColor("#161411");
+    next.setBackgroundColor(PAGE_CHROME_BACKGROUND);
     attachGuards(next.webContents);
     win.contentView.addChildView(next);
     attachResize(win);
@@ -304,6 +307,7 @@ export function createPageView(
         height: launcherSize?.height ?? LAUNCHER_HEIGHT,
       });
       win.setAlwaysOnTop(wasAlwaysOnTop);
+      win.setBackgroundColor(LAUNCHER_BACKGROUND);
       win.webContents.focus();
     }
     launcherSize = null;

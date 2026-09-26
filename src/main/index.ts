@@ -19,6 +19,9 @@ import {
   LAUNCHER_MIN_HEIGHT,
   LAUNCHER_MIN_WIDTH,
   LAUNCHER_WIDTH,
+  clampLauncherFit,
+  defaultLauncherSize,
+  launcherWindowChrome,
 } from "../shared/page-layout";
 import { parseSpokenIndex } from "../shared/parse-number";
 import { resultOpenError } from "../shared/safe-url";
@@ -29,6 +32,9 @@ app.setName("Poppy");
 app.disableHardwareAcceleration();
 // Hold-to-speak is triggered by a global shortcut, not a page gesture.
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
+if (process.platform === "linux") {
+  app.commandLine.appendSwitch("enable-transparent-visuals");
+}
 
 let mainWindow: BrowserWindow | null = null;
 let isQuitting = false;
@@ -109,6 +115,22 @@ function closePage(options?: { error?: string | null }): void {
   });
 }
 
+function pageChromeOpen(): boolean {
+  return pageView.isOpen() || state.phase === "page" || state.phase === "opening";
+}
+
+function fitLauncherWindow(size?: { width: number; height: number }): void {
+  if (!mainWindow || mainWindow.isDestroyed() || pageChromeOpen()) {
+    return;
+  }
+  const next = clampLauncherFit(size ?? defaultLauncherSize(state.results.length));
+  const [currentWidth, currentHeight] = mainWindow.getContentSize();
+  if (Math.abs(currentWidth - next.width) < 2 && Math.abs(currentHeight - next.height) < 2) {
+    return;
+  }
+  mainWindow.setContentSize(next.width, next.height);
+}
+
 function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: LAUNCHER_WIDTH,
@@ -117,9 +139,10 @@ function createWindow(): BrowserWindow {
     minHeight: LAUNCHER_MIN_HEIGHT,
     show: false,
     frame: false,
-    backgroundColor: "#161411",
     autoHideMenuBar: true,
     alwaysOnTop: true,
+    center: true,
+    ...launcherWindowChrome(process.platform),
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,
@@ -150,6 +173,12 @@ function attachIpc(): void {
   });
   ipcMain.handle("window:hide", () => {
     mainWindow?.hide();
+  });
+  ipcMain.handle("window:fit", (_event, size: { width?: number; height?: number }) => {
+    if (typeof size?.width !== "number" || typeof size?.height !== "number") {
+      return;
+    }
+    fitLauncherWindow({ width: size.width, height: size.height });
   });
   ipcMain.handle("hotkey:keyup", (_event, input: { key?: string; code?: string }) => {
     hold?.notifyPossibleRelease(input);
@@ -462,8 +491,18 @@ app.whenReady().then(async () => {
 
   attachIpc();
   buildMenu();
-  mainWindow = createWindow();
-  registerHotkey();
+  const openMainWindow = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      return;
+    }
+    mainWindow = createWindow();
+    registerHotkey();
+  };
+  if (process.platform === "linux") {
+    setTimeout(openMainWindow, 80);
+  } else {
+    openMainWindow();
+  }
 
   app.on("activate", () => {
     if (mainWindow && !mainWindow.isDestroyed()) {

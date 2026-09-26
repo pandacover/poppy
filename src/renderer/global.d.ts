@@ -15,6 +15,7 @@ export interface PoppyApi {
   reportMicWarning: (message: string) => Promise<void>;
   minimize: () => Promise<void>;
   hide: () => Promise<void>;
+  fitWindow: (size: { width: number; height: number }) => Promise<void>;
 }
 
 declare global {
