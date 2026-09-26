@@ -342,13 +342,16 @@ async function openResult(index: number): Promise<void> {
   });
   try {
     await pageView.show(result.url);
-    if (state.phase !== "opening") {
+    if (state.phase !== "opening" || !pageView.isOpen()) {
       return;
     }
     setState({ phase: "page", mode: "pick", error: null });
-  } catch {
+  } catch (error) {
+    if (state.phase !== "opening") {
+      return;
+    }
     closePage({
-      error: "Could not load that page.",
+      error: error instanceof Error && error.message ? error.message : "Could not load that page.",
     });
   }
 }
