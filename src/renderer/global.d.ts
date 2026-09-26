@@ -11,6 +11,7 @@ export interface PoppyApi {
   notifyKeyUp: (input: { key?: string; code?: string }) => Promise<void>;
   cancelListen: () => Promise<void>;
   reportMicError: (message: string) => Promise<void>;
+  reportMicWarning: (message: string) => Promise<void>;
   minimize: () => Promise<void>;
   hide: () => Promise<void>;
 }

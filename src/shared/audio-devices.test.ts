@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { isLikelyLoopbackLabel, pickAudioInputId, audioTrackConstraints } from "./audio-devices";
+import {
+  audioInputSituation,
+  audioTrackConstraints,
+  isLikelyLoopbackLabel,
+  pickAudioInputId,
+} from "./audio-devices";
 
 describe("isLikelyLoopbackLabel", () => {
   it("flags PulseAudio/PipeWire monitor sources", () => {
@@ -27,6 +32,25 @@ describe("pickAudioInputId", () => {
       { kind: "audioinput", deviceId: "default", label: "" },
     ]);
     assert.equal(id, "default");
+  });
+
+  it("flags when the only inputs are monitor/loopback devices", () => {
+    const situation = audioInputSituation([
+      { kind: "audioinput", deviceId: "default", label: "Default" },
+      { kind: "audioinput", deviceId: "mon", label: "Monitor of Built-in Audio Analog Stereo" },
+      { kind: "audiooutput", deviceId: "speakers", label: "Speakers" },
+    ]);
+    assert.equal(situation.onlyLoopback, true);
+    assert.equal(situation.usableCount, 1);
+    assert.ok(situation.pickedId);
+  });
+
+  it("does not treat a real mic as loopback-only", () => {
+    const situation = audioInputSituation([
+      { kind: "audioinput", deviceId: "mic-1", label: "USB Audio Device" },
+    ]);
+    assert.equal(situation.onlyLoopback, false);
+    assert.equal(situation.usableCount, 1);
   });
 });
 

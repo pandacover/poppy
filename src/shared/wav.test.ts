@@ -6,6 +6,7 @@ import {
   mixDownToMono,
   peakAmplitude,
   readWavHeader,
+  rmsAmplitude,
 } from "./wav";
 import { arrayBufferToBase64, base64ByteLength } from "./base64";
 
@@ -45,5 +46,11 @@ describe("pcm helpers", () => {
   it("reports peak amplitude", () => {
     assert.equal(peakAmplitude([0.1, -0.4, 0.2]), 0.4);
     assert.equal(peakAmplitude(new Float32Array(8)), 0);
+  });
+
+  it("reports RMS amplitude", () => {
+    assert.equal(rmsAmplitude(new Float32Array(8)), 0);
+    assert.ok(Math.abs(rmsAmplitude([1, -1, 1, -1]) - 1) < 1e-9);
+    assert.ok(rmsAmplitude([0.002, 0, -0.002, 0]) < 0.002);
   });
 });

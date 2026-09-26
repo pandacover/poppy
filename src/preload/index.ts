@@ -38,6 +38,7 @@ contextBridge.exposeInMainWorld("poppy", {
     ipcRenderer.invoke("hotkey:keyup", input),
   cancelListen: () => ipcRenderer.invoke("listen:cancel"),
   reportMicError: (message: string) => ipcRenderer.invoke("mic:error", message),
+  reportMicWarning: (message: string) => ipcRenderer.invoke("mic:warn", message),
   minimize: () => ipcRenderer.invoke("window:minimize"),
   hide: () => ipcRenderer.invoke("window:hide"),
 });

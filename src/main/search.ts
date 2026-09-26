@@ -1,21 +1,25 @@
 import { BrowserWindow, session } from "electron";
 import {
-  classifyGooglePage,
-  googleInterstitialError,
-  parseGoogleHtml,
-} from "../shared/parse-google";
+  classifyDdgPage,
+  ddgInterstitialError,
+  parseDdgHtml,
+} from "../shared/parse-ddg";
 import type { SearchResult } from "../shared/types";
 
 /**
- * Search backend: scrape Google's results page from a hidden BrowserWindow
- * using Electron's Chromium. This is NOT the Google Search API.
+ * Search backend: scrape DuckDuckGo's no-JS HTML results page from a hidden
+ * BrowserWindow using Electron's Chromium. This is NOT a paid search API.
  *
- * Captchas, cookie consent walls, and HTML changes can break extraction.
- * Those pages are detected and surfaced as errors instead of hanging.
+ * Bot checks and HTML changes can break extraction. Those pages are detected
+ * and surfaced as errors instead of hanging.
+ *
+ * Google's public SERP (and its CAPTCHA / unusual-traffic interstitial) is
+ * not used. A Google scrape could be re-added later as an optional backend.
  */
 
 const LOAD_TIMEOUT_MS = 20_000;
 const POLL_MS = 350;
+const HTML_ENDPOINT = "https://html.duckduckgo.com/html/";
 
 let scraper: BrowserWindow | null = null;
 let queue: Promise<unknown> = Promise.resolve();
@@ -23,17 +27,19 @@ let queue: Promise<unknown> = Promise.resolve();
 function searchUrl(query: string): string {
   const params = new URLSearchParams({
     q: query,
-    hl: "en",
-    pws: "0",
-    gbv: "1",
+    kl: "wt-wt",
   });
-  return `https://www.google.com/search?${params.toString()}`;
+  return `${HTML_ENDPOINT}?${params.toString()}`;
 }
 
 function getScraper(): BrowserWindow {
   if (scraper && !scraper.isDestroyed()) {
     return scraper;
   }
+  const ses = session.fromPartition("persist:poppy-ddg");
+  ses.setUserAgent(
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
+  );
   scraper = new BrowserWindow({
     show: false,
     width: 1280,
@@ -42,7 +48,7 @@ function getScraper(): BrowserWindow {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
-      session: session.fromPartition("persist:poppy-google"),
+      session: ses,
     },
   });
   scraper.webContents.setAudioMuted(true);
@@ -60,23 +66,34 @@ export async function searchWeb(query: string): Promise<SearchResult[]> {
 }
 
 async function searchOnce(query: string): Promise<SearchResult[]> {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return [];
+  }
+  if (trimmed.length >= 500) {
+    throw new Error("Search query is too long for DuckDuckGo. Try a shorter phrase.");
+  }
+
   const win = getScraper();
-  await loadUrl(win, searchUrl(query));
+  await loadUrl(win, searchUrl(trimmed));
   const snapshot = await waitForPage(win);
-  const kind = classifyGooglePage(snapshot.href, snapshot.html, snapshot.text);
-  const interstitial = googleInterstitialError(kind);
+  const kind = classifyDdgPage(snapshot.href, snapshot.html, snapshot.text);
+  const interstitial = ddgInterstitialError(kind);
   if (interstitial) {
     throw new Error(interstitial);
   }
 
-  const results = parseGoogleHtml(snapshot.html);
+  const results = parseDdgHtml(snapshot.html);
   if (results.length > 0) {
     return results;
   }
 
+  if (kind === "empty") {
+    return [];
+  }
   if (kind === "unknown") {
     throw new Error(
-      "Google did not return a usable results page (layout change, block, or empty document).",
+      "DuckDuckGo did not return a usable results page (layout change, block, or empty document).",
     );
   }
   return [];
@@ -102,11 +119,14 @@ async function waitForPage(win: BrowserWindow): Promise<PageSnapshot> {
       text: document.body ? document.body.innerText : ""
     })`)) as PageSnapshot;
 
-    const kind = classifyGooglePage(last.href, last.html, last.text);
-    if (kind === "captcha" || kind === "consent") {
+    const kind = classifyDdgPage(last.href, last.html, last.text);
+    if (kind === "bot") {
       return last;
     }
-    if (kind === "results" && parseGoogleHtml(last.html).length > 0) {
+    if (kind === "empty") {
+      return last;
+    }
+    if (kind === "results" && parseDdgHtml(last.html).length > 0) {
       return last;
     }
     await sleep(POLL_MS);
@@ -148,18 +168,24 @@ function loadUrl(win: BrowserWindow, url: string): Promise<void> {
       if (code === -3) {
         return;
       }
-      finish(() => reject(new Error(`Search page failed to load (${description}).`)));
+      finish(() =>
+        reject(new Error(`DuckDuckGo search page failed to load (${description}).`)),
+      );
     };
 
     win.webContents.on("did-finish-load", onFinish);
     win.webContents.on("did-stop-loading", onFinish);
     win.webContents.on("did-fail-load", onFail);
-    void win.loadURL(url).catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : String(error);
-      if (!message.includes("ERR_ABORTED")) {
-        finish(() => reject(error instanceof Error ? error : new Error(message)));
-      }
-    });
+    void win
+      .loadURL(url, {
+        extraHeaders: "Accept-Language: en-US,en;q=0.9\nReferer: https://html.duckduckgo.com/html/\n",
+      })
+      .catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        if (!message.includes("ERR_ABORTED")) {
+          finish(() => reject(error instanceof Error ? error : new Error(message)));
+        }
+      });
   });
 }
 
